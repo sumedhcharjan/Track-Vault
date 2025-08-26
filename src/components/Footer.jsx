@@ -1,3 +1,8 @@
 export default function (){
-    return <h1>footer</h1>
+    return (
+
+        <div className="h-10 w-13 bg-black-500">
+        <span className="text-8xl">footer</span>
+    </div>
+    )
 }
