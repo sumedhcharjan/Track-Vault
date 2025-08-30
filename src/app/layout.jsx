@@ -1,20 +1,19 @@
 import Footer from "@/components/Footer";
-import "../styles/globals.css"
-import Navbar from "@/components/Navbar"
+import "../styles/globals.css";
+import Navbar from "@/components/Navbar";
 import { Providers } from "@/components/provider";
 
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body>
+      <body className="min-h-screen flex flex-col">
         <Navbar />
-
-          <Providers>{children}</Providers>
-
-          <Footer />
+        <Providers className="flex-1">{children}</Providers>
+        <Footer />
       </body>
     </html>
   );
 }
+
 
 

@@ -4,10 +4,12 @@ import { useKindeAuth } from "@kinde-oss/kinde-auth-nextjs"
 import { useEffect, useState } from "react"
 import api from "@/lib/axios"
 import { Input } from "@/components/ui/input"
+import { redirect } from "next/dist/server/api-utils"
 
 export default function Dashboard() {
     const { user } = useKindeAuth();
     const [file, setFile] = useState();
+
 
     const handleFileSubmit = async () => {
         console.log(user);
@@ -40,15 +42,15 @@ export default function Dashboard() {
         }
     };
 
-useEffect(() => {
-    api.post("/register")
-        .then((res) => {
-            console.log("Register response:", res.data);
-        })
-        .catch((err) => {
-            console.error("Error:", err.response?.data || err.message);
-        });
-}, [user]);
+    useEffect(() => {
+        api.post("/register")
+            .then((res) => {
+                console.log("Register response:", res.data);
+            })
+            .catch((err) => {
+                console.error("Error:", err.response?.data || err.message);
+            });
+    }, [user]);
 return (
 
     <main>

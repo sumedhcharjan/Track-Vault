@@ -1,18 +1,9 @@
-import Navbar from "@/components/Navbar";
-import Footer from "@/components/Footer";
-import { getKindeServerSession } from "@kinde-oss/kinde-auth-nextjs/server";
-export default async function RootLayout({ children }) {
-  const {isAuthenticated , getUser} = getKindeServerSession();
-  const user = await getUser();
-
+// src/app/dashboard/layout.tsx (or .jsx)
+export default function DashboardLayout({ children }) {
   return (
-    <html lang="en">
-      <body>
-
-        {children}
-
-
-      </body>
-    </html>
+    <div className="p-6">
+      <h1 className="text-2xl font-bold mb-4">Dashboard</h1>
+      {children}
+    </div>
   );
 }

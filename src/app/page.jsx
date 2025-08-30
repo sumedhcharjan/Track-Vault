@@ -1,9 +1,17 @@
-
-import Image from "next/image";
+import { getKindeServerSession } from "@kinde-oss/kinde-auth-nextjs/server";
+import { redirect } from "next/navigation";
 import { RegisterLink, LoginLink } from "@kinde-oss/kinde-auth-nextjs/components";
-import { Button } from "@/components/ui/Button.jsx";
+import { Button } from "@/components/ui/button"; 
+export default async function Home() {
+  const { getUser } = getKindeServerSession();
+  const user = await getUser();
 
-export default function Home() {
-  
-  return <h1>heloo</h1>
+  if (user) {
+    redirect("/dashboard");
+  }
+
+  return (
+<h1>Hello World 🚀</h1>
+
+  );
 }

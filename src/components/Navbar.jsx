@@ -4,6 +4,7 @@ import { useKindeAuth, LoginLink, LogoutLink  } from "@kinde-oss/kinde-auth-next
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { getKindeServerSession } from "@kinde-oss/kinde-auth-nextjs/server";
 import { redirect } from "next/dist/server/api-utils";
+import { Button } from "./ui/Button";
 
 export default async function Navbar() {
  const {isAuthenticated , getUser} = getKindeServerSession();
@@ -12,7 +13,7 @@ export default async function Navbar() {
 
     return (
     <nav className="flex justify-between items-center px-6 py-4 border-b">
-      <Link href="/" className="text-xl font-bold">FileX</Link>
+      <Link href={loggedIn ? "/dashboard" : "/"} className="text-xl font-bold">FileX</Link>
       
       {!loggedIn ? (
         // Public navbar
@@ -23,9 +24,7 @@ export default async function Navbar() {
       ) : (
         // Private navbar
         <div className="flex items-center gap-6">
-          <Link href="/dashboard/upload">Upload</Link>
-          <Link href="/dashboard/files">Files</Link>
-          <Link href="/dashboard/analytics">Analytics</Link>
+          <Link href="/uploadedfiles"><Button>Your Files</Button></Link>
 
           <div className="flex items-center gap-2">
             <Avatar>
