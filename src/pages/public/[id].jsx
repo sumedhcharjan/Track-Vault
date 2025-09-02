@@ -4,25 +4,21 @@ import { supabase } from "@/lib/supabase";
 import { redis } from "@/lib/redis";
 import { Button } from "@/components/ui/Button";
 import "@/styles/globals.css";
-
-
-
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import api from "@/lib/axios";
-export default function PublicFilePage({ fileMeta }) {
+
+export default function PublicFilePage({ fileMeta, views }) {
   const [file, setFile] = useState(fileMeta);
-  const [passwordRequired, setPasswordRequired] = useState(true);
+  const [passwordRequired, setPasswordRequired] = useState(!!file.file_password);
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const verifyPassword = async (file) => {
+  const verifyPassword = async () => {
     setLoading(true);
     try {
-    console.log(file.file_password)
-    console.log(password)
-      if (password === fileMeta.file_password) {
-        setPasswordRequired(false);
+      if (password === file.file_password) {
+        setPasswordRequired(false); // unlock file
         setError("");
       } else {
         setError("Invalid password");
@@ -37,17 +33,35 @@ export default function PublicFilePage({ fileMeta }) {
 
   const handleDownload = async () => {
     try {
-      await api.post("file/download", { id: file.id });
-      // Trigger browser download
+      const { data } = await api.get("/analytics/get", {
+        params: { id: file.id },
+      });
+      const current = Number(data.downloads) || 0;
+      const max = Number(file.max_downloads) || Infinity;
+
+      if (current >= max) {
+        alert("Download limit reached!");
+        return;
+      }
+
+      await api.post("/analytics/track", { id: file.id, type: "download" });
+
+      const response = await fetch(file.file_url);
+      const blob = await response.blob();
+
       const link = document.createElement("a");
-      link.href = file.url;
-      link.download = file.name;
+      link.href = window.URL.createObjectURL(blob);
+      link.download = file.file_name || "download";
+      document.body.appendChild(link);
       link.click();
+      link.remove();
     } catch (err) {
       console.error(err);
+      alert("Something went wrong. Please try again.");
     }
   };
 
+  // if password protection enabled → ask first
   if (passwordRequired) {
     return (
       <div className="max-w-md mx-auto mt-20 p-6 border rounded-lg shadow">
@@ -70,6 +84,7 @@ export default function PublicFilePage({ fileMeta }) {
     );
   }
 
+  // otherwise show file directly
   if (!file) {
     return (
       <div className="max-w-md mx-auto mt-20 p-6 border rounded-lg shadow">
@@ -84,19 +99,17 @@ export default function PublicFilePage({ fileMeta }) {
 
       {file.file_type?.startsWith("image/") ? (
         <img src={file.file_url} alt={file.file_name} className="w-full rounded" />
-      ) : file.type?.startsWith("application/pdf") ? (
+      ) : file.file_type?.startsWith("application/pdf") ? (
         <iframe
-          src={file.filr_url + "#page=1"}
+          src={file.file_url + "#page=1"}
           className="w-full h-[600px] rounded"
-          title={file.name}
+          title={file.file_name}
         />
       ) : (
         <p className="text-sm text-gray-500">Preview not available</p>
       )}
 
       <Button
-        variant="secondary"
-        size="sm"
         onClick={handleDownload}
         className="mt-4 bg-blue-600 text-white px-4 py-2 rounded"
       >
@@ -106,12 +119,11 @@ export default function PublicFilePage({ fileMeta }) {
   );
 }
 
-// SSR to fetch file metadata before rendering
+// SSR
 export async function getServerSideProps({ params }) {
   const { id } = params;
 
   try {
-    // Fetch file meta from Supabase
     const { data: file, error } = await supabase
       .from("files")
       .select("*")
@@ -122,13 +134,14 @@ export async function getServerSideProps({ params }) {
       return { notFound: true };
     }
 
-    // Increment view counter in redis
     await redis.incr(`file:${id}:views`);
     await redis.set(`file:${id}:lastAccess`, Date.now());
+    const views = await redis.get(`file:${file.id}:views`);
 
     return {
       props: {
         fileMeta: file,
+        views,
       },
     };
   } catch (err) {

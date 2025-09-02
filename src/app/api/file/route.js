@@ -34,8 +34,8 @@ export async function POST(req) {
     );
 
     const fileUrl = `https://${process.env.AWS_S3_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${fileName}`;
-    const rawPassword = Math.random().toString(36).slice(-8);
-    const hashedPassword = await bcrypt.hash(rawPassword, 10);
+    // const rawPassword = Math.random().toString(36).slice(-8);
+    // const hashedPassword = await bcrypt.hash(rawPassword, 10);
 
     const { data, error } = await supabase
       .from("files")
@@ -46,7 +46,7 @@ export async function POST(req) {
         file_url: fileUrl,
         file_type: file.type,
         file_size: file.size,
-        file_password: hashedPassword
+
       }])
       .select();
 

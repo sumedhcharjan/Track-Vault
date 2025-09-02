@@ -26,7 +26,6 @@ export default function Options({ file }) {
     }
   };
 
-  // copy url
   const handleCopy = async () => {
     try {
       const link = `http://localhost:3000/public/${file.id}`;
@@ -49,10 +48,10 @@ export default function Options({ file }) {
   const handleDownload = async () => {
     try {
       // track download event
-      await api.post("/analytics/track", {
-        id: file.id,
-        type: "download",
-      });
+      // await api.post("/analytics/track", {
+      //   id: file.id,
+      //   type: "download",
+      // });
 
       // trigger download
       const link = document.createElement("a");
