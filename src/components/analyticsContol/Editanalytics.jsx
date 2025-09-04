@@ -13,7 +13,8 @@ export default function EditAccessForm({ file }) {
   const [maxViews, setMaxViews] = useState("");
   const [maxDownloads, setMaxDownloads] = useState("");
   const [password, setPassword] = useState("");
-  const [isOneTime, setIsOneTime] = useState(false);
+  const [deleteOnExpire, setDeleteOnExpire] = useState(file.delete_on_expire || false);
+  const [deleteOnLimit, setDeleteOnLimit] = useState(file.delete_on_limit || false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [showForm, setShowForm] = useState(false);
@@ -26,11 +27,12 @@ export default function EditAccessForm({ file }) {
     try {
       const res = await api.post("/analytics/set", {
         file_id: file.id,
-        expiresA: expiresAt || null,
+        expiresAt: expiresAt || null,
         maxViews: maxViews ? Number(maxViews) : null,
         maxDownloads: maxDownloads ? Number(maxDownloads) : null,
         password: password || null,
-        isOneTime,
+        deleteOnExpire,
+        deleteOnLimit,
       });
 
       if (res.data.success) {
@@ -48,7 +50,6 @@ export default function EditAccessForm({ file }) {
 
   return (
     <main>
-
       <Card className="p-4">
         <CardHeader>
           <CardTitle>Edit Access Control</CardTitle>
@@ -67,9 +68,16 @@ export default function EditAccessForm({ file }) {
                 <Input
                   type="datetime-local"
                   value={expiresAt}
-                  placeholder={file.edpiresAt}
+                  placeholder={file.expires_at}
                   onChange={(e) => setExpiresAt(e.target.value)}
                 />
+                <div className="flex items-center gap-2 mt-2">
+                  <Checkbox
+                    checked={deleteOnExpire}
+                    onCheckedChange={(val) => setDeleteOnExpire(!!val)}
+                  />
+                  <Label>Delete file after expiry</Label>
+                </div>
               </div>
 
               <div className="space-y-2">
@@ -80,6 +88,13 @@ export default function EditAccessForm({ file }) {
                   placeholder={file.max_views}
                   onChange={(e) => setMaxViews(e.target.value)}
                 />
+                <div className="flex items-center gap-2 mt-2">
+                  <Checkbox
+                    checked={deleteOnLimit}
+                    onCheckedChange={(val) => setDeleteOnLimit(!!val)}
+                  />
+                  <Label>Delete file after max views/downloads reached</Label>
+                </div>
               </div>
 
               <div className="space-y-2">
@@ -92,6 +107,7 @@ export default function EditAccessForm({ file }) {
                 />
               </div>
 
+              {/* Password */}
               <div className="space-y-2">
                 <Label>Password (optional):</Label>
                 <Input
@@ -100,14 +116,6 @@ export default function EditAccessForm({ file }) {
                   placeholder={file.file_password}
                   onChange={(e) => setPassword(e.target.value)}
                 />
-              </div>
-
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  checked={isOneTime}
-                  onCheckedChange={(val) => setIsOneTime(!!val)}
-                />
-                <Label>One-time link</Label>
               </div>
 
               <Button type="submit" disabled={loading}>

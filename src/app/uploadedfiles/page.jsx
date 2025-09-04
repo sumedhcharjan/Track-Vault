@@ -1,4 +1,5 @@
 import FileCard from "@/components/filecard/Filecard";
+import InactiveFileCard from "@/components/filecard/InactiveFilecard";
 import { getKindeServerSession } from "@kinde-oss/kinde-auth-nextjs/server";
 import { supabase } from "@/lib/supabase";
 
@@ -26,11 +27,25 @@ export default async function Uploadedfiles() {
   return (
     <div className="p-6">
       <h1 className="text-2xl font-bold mb-6">Your Files</h1>
+
+      <h2 className="text-xl font-semibold mb-4">Active Files</h2>
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 mb-8">
+        {files
+          .filter((file) => file.is_active)
+          .map((file) => (
+            <FileCard key={file.id} file={file} />
+          ))}
+      </div>
+
+      <h2 className="text-xl font-semibold mb-4">Inactive Files</h2>
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-        {files.map((file) => (
-          <FileCard key={file.id} file={file} />
-        ))}
+        {files
+          .filter((file) => !file.is_active)
+          .map((file) => (
+            <InactiveFileCard key={file.id} file={file} />
+          ))}
       </div>
     </div>
+
   );
 }
