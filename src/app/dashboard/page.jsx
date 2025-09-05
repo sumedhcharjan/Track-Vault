@@ -4,59 +4,70 @@ import { useKindeAuth } from "@kinde-oss/kinde-auth-nextjs"
 import { useEffect, useState } from "react"
 import api from "@/lib/axios"
 import { Input } from "@/components/ui/input"
-import { redirect } from "next/dist/server/api-utils"
 
 export default function Dashboard() {
-    const { user } = useKindeAuth();
-    const [file, setFile] = useState();
+  const { user } = useKindeAuth();
+  const [file, setFile] = useState();
+  const [saving, setSaving] = useState(false);
 
+  const handleFileSubmit = async () => {
+    if (!file) {
+      alert("Please select a file first!");
+      return;
+    }
 
-    const handleFileSubmit = async () => {
-        console.log(user);
-        if (!file) {
-            alert("Please select a file first!");
-            return;
-        }
+    if (!user?.id) {
+      alert("Login first!");
+      return;
+    }
 
-        if(!user?.id){
-            alert("login first");
-        }
+    setSaving(true);
 
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("user_id", user.id);
+      formData.append("file_name", file.name);
 
+      const res = await api.post("/file", formData, {
+        headers: {
+          "Content-Type": "multipart/form-data",
+        },
+      });
 
-        try {
-            const formData = new FormData();
-            formData.append("file", file);
-            formData.append("user_id", user.id);
-            formData.append("file_name",file.name)
+      console.log("File upload success:", res.data);
+    } catch (err) {
+      console.error("File upload error:", err.response?.data || err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
 
-            const res = await api.post("/file", formData, {
-                headers: {
-                    "Content-Type": "multipart/form-data",
-                },
-            });
+  useEffect(() => {
+    api.post("/register")
+      .then((res) => console.log("Register response:", res.data))
+      .catch((err) => console.error("Error:", err.response?.data || err.message));
+  }, [user]);
 
-            console.log("File upload success:", res.data);
-        } catch (err) {
-            console.error("File upload error:", err.response?.data || err.message);
-        }
-    };
+  return (
+    <main className="flex flex-col items-center justify-center min-h-screen px-4">
+      <div className="w-full max-w-md space-y-4 rounded-2xl border p-6 shadow-sm">
+        <h2 className="text-2xl font-semibold text-center">Upload your file</h2>
 
-    useEffect(() => {
-        api.post("/register")
-            .then((res) => {
-                console.log("Register response:", res.data);
-            })
-            .catch((err) => {
-                console.error("Error:", err.response?.data || err.message);
-            });
-    }, [user]);
-return (
+        <Input
+          type="file"
+          onChange={(e) => setFile(e.target.files[0])}
+          className="cursor-pointer"
+        />
 
-    <main>
-        <Input type="file" onChange={(e) => setFile(e.target.files[0])} placeholder="add your file" />
-        <Button onClick={handleFileSubmit} > add file</Button>
+        <Button
+          onClick={handleFileSubmit}
+          className="w-full"
+          disabled={saving}
+        >
+          {saving ? "Saving..." : "Add File"}
+        </Button>
+      </div>
     </main>
-
-)
+  )
 }

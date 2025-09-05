@@ -2,10 +2,18 @@
 
 import { supabase } from "@/lib/supabase";
 import { redis } from "@/lib/redis";
-import { Button } from "@/components/ui/Button";
-import "@/styles/globals.css";
-import { useState } from "react";
 import api from "@/lib/axios";
+import { useState } from "react";
+import "@/styles/globals.css"
+
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardContent,
+} from "@/components/ui/card";
 
 export default function PublicFilePage({ fileMeta }) {
   const [file, setFile] = useState(fileMeta);
@@ -21,7 +29,7 @@ export default function PublicFilePage({ fileMeta }) {
         setPasswordRequired(false);
         setError("");
       } else {
-        setError("Invalid password");
+        setError("Invalid password. Please try again.");
       }
     } finally {
       setLoading(false);
@@ -38,90 +46,124 @@ export default function PublicFilePage({ fileMeta }) {
     }
   };
 
-  const handleDownload = async () => {
-    try {
-      const downloads = await redis.incr(`file:${file.id}:downloads`);
-      if (file.max_downloads && downloads > file.max_downloads) {
-        await redis.decr(`file:${file.id}:downloads`);
-        alert("Download limit reached");
-        return;
-      }
-      if (file.delete_on_limit && file.max_downloads && downloads >= file.max_downloads) {
-        await triggerDeletePipeline(file.id);
-      }
-      const response = await fetch(file.file_url);
-      const blob = await response.blob();
-      const link = document.createElement("a");
-      link.href = window.URL.createObjectURL(blob);
-      link.download = file.file_name || "download";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-    } catch {
-      alert("Something went wrong. Please try again.");
+const handleDownload = async () => {
+  try {
+    const res = await fetch("/api/analytics/track", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: file.id, type: "download" }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok || !data.success) {
+      alert("Download tracking failed. Limit might be reached.");
+      return;
     }
-  };
+
+    const response = await fetch(file.file_url);
+    const blob = await response.blob();
+    const link = document.createElement("a");
+    link.href = window.URL.createObjectURL(blob);
+    link.download = file.file_name || "download";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } catch (err) {
+    console.error("Download error:", err);
+    alert("Something went wrong. Please try again.");
+  }
+};
+
 
   if (!file) {
     return (
-      <div className="max-w-md mx-auto mt-20 p-6 border rounded-lg shadow">
-        <p>File not found</p>
-      </div>
+      <Card className="max-w-md mx-auto mt-20 shadow-sm rounded-2xl">
+        <CardContent className="p-6 text-center text-gray-600">
+          File not found.
+        </CardContent>
+      </Card>
     );
   }
 
-  // ✅ File expired check
   if (file.expired) {
     return (
-      <div className="max-w-md mx-auto mt-20 p-6 border rounded-lg shadow">
-        <p>This file has expired or is no longer available.</p>
-      </div>
+      <Card className="max-w-md mx-auto mt-20 shadow-sm rounded-2xl">
+        <CardHeader>
+          <CardTitle className="text-center text-red-600">
+            File Unavailable
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-6 text-center text-gray-600">
+          This file has expired or is no longer available.
+        </CardContent>
+      </Card>
     );
   }
 
   if (passwordRequired) {
     return (
-      <div className="max-w-md mx-auto mt-20 p-6 border rounded-lg shadow">
-        <h1 className="text-xl font-bold mb-4">Enter Password</h1>
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="w-full border p-2 rounded"
-        />
-        {error && <p className="text-red-500 mt-2">{error}</p>}
-        <Button
-          onClick={verifyPassword}
-          disabled={loading}
-          className="mt-4 bg-blue-600 text-white px-4 py-2 rounded"
-        >
-          {loading ? "Checking..." : "Unlock"}
-        </Button>
-      </div>
+      <Card className="max-w-md mx-auto mt-20 shadow-md rounded-2xl">
+        <CardHeader>
+          <CardTitle className="text-lg font-semibold text-gray-800">
+            Enter Password
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Input
+            type="password"
+            placeholder="Enter file password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          {error && <p className="text-sm text-red-500">{error}</p>}
+          <Button
+            onClick={verifyPassword}
+            disabled={loading}
+            className="w-full"
+          >
+            {loading ? "Checking..." : "Unlock"}
+          </Button>
+        </CardContent>
+      </Card>
     );
   }
 
   return (
-    <div className="max-w-2xl mx-auto mt-10 p-6 border rounded-lg shadow">
-      <h1 className="text-2xl font-bold mb-4">{file.file_name}</h1>
-      {file.file_type?.startsWith("image/") ? (
-        <img src={file.file_url} alt={file.file_name} className="w-full rounded" />
-      ) : file.file_type?.startsWith("application/pdf") ? (
-        <iframe
-          src={file.file_url + "#page=1"}
-          className="w-full h-[600px] rounded"
-          title={file.file_name}
-        />
-      ) : (
-        <p className="text-sm text-gray-500">Preview not available</p>
-      )}
-      <Button
-        onClick={handleDownload}
-        className="mt-4 bg-blue-600 text-white px-4 py-2 rounded"
-      >
-        Download
-      </Button>
-    </div>
+    <Card className="max-w-2xl mx-auto mt-12 shadow-md rounded-2xl">
+      <CardHeader>
+        <CardTitle className="text-xl font-bold text-gray-800 truncate">
+          {file.file_name}
+        </CardTitle>
+      </CardHeader>
+
+      <CardContent className="space-y-6">
+        {file.file_type?.startsWith("image/") ? (
+          <img
+            src={file.file_url}
+            alt={file.file_name}
+            className="w-full rounded-lg shadow-sm"
+          />
+        ) : file.file_type?.startsWith("application/pdf") ? (
+          <iframe
+            src={file.file_url + "#page=1"}
+            className="w-full h-[600px] rounded-lg shadow-sm"
+            title={file.file_name}
+          />
+        ) : (
+          <p className="text-sm text-gray-500 italic">
+            Preview not available for this file type.
+          </p>
+        )}
+
+        <Button
+          onClick={handleDownload}
+          className="w-full"
+        >
+          Download File
+        </Button>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -139,9 +181,7 @@ export async function getServerSideProps({ params }) {
     if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) {
       if (file.delete_on_expire) {
         try {
-          await api.delete("/deletepipeline", {
-            data: { file_id: file.id },
-          });
+          await api.delete("/deletepipeline", { data: { file_id: file.id } });
         } catch (err) {
           console.error("Delete pipeline (expire) failed:", err.message);
         }

@@ -13,7 +13,6 @@ export async function GET(req) {
     redis.get(`file:${id}:downloads`),
     redis.get(`file:${id}:lastAccess`),
   ]);
-  console.log(views)
 
   return Response.json({
     views: Number(views || 0),
