@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 
-export default function EditAccessForm({ file }) {
+export default function Editanalytics({ file }) {
   const [expiresAt, setExpiresAt] = useState("");
   const [maxViews, setMaxViews] = useState("");
   const [maxDownloads, setMaxDownloads] = useState("");

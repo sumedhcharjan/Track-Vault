@@ -1,5 +1,5 @@
 import FileCard from "@/components/filecard/Filecard";
-import InactiveFileCard from "@/components/filecard/InactiveFilecard";
+import InactiveFileCard from "@/components/filecard/InactiveFileCard";
 import { getKindeServerSession } from "@kinde-oss/kinde-auth-nextjs/server";
 import { supabase } from "@/lib/supabase";
 

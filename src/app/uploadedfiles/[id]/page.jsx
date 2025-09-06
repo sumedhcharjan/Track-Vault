@@ -1,5 +1,5 @@
 import Analytics from "@/components/analyticsContol/analytics";
-import Preview from "@/components/analyticsContol/preview";
+import Preview from "@/components/analyticsContol/Preview";
 import Editanalytics from "@/components/analyticsContol/Editanalytics";
 import { getKindeServerSession } from "@kinde-oss/kinde-auth-nextjs/server";
 import { supabase } from "@/lib/supabase";
