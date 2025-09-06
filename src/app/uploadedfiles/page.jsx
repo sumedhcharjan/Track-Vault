@@ -3,9 +3,23 @@ import InactiveFileCard from "@/components/filecard/InactiveFileCard";
 import { getKindeServerSession } from "@kinde-oss/kinde-auth-nextjs/server";
 import { supabase } from "@/lib/supabase";
 
+export const dynamic = "force-dynamic";
+
+
 export default async function Uploadedfiles() {
   const { getUser } = getKindeServerSession();
   const user = await getUser();
+
+  if (!user) {
+    return (
+      <div className="p-6 flex justify-center items-center h-64">
+        <p className="text-red-500 font-medium">
+          You must be logged in to view files.
+        </p>
+      </div>
+    );
+  }
+
 
   const { data: files, error } = await supabase
     .from("files")
