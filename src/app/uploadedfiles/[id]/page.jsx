@@ -1,4 +1,4 @@
-import Analytics from "@/components/analyticsContol/analytics";
+import Analytics from "@/components/analyticsContol/Analytics";
 import Preview from "@/components/analyticsContol/Preview";
 import Editanalytics from "@/components/analyticsContol/Editanalytics";
 import { getKindeServerSession } from "@kinde-oss/kinde-auth-nextjs/server";
