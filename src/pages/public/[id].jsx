@@ -14,6 +14,7 @@ import {
   CardTitle,
   CardContent,
 } from "@/components/ui/card";
+import { FlickeringGrid } from "@/components/ui/flickering-grid";
 
 export default function PublicFilePage({ fileMeta }) {
   const [file, setFile] = useState(fileMeta);
@@ -48,27 +49,29 @@ export default function PublicFilePage({ fileMeta }) {
 
 const handleDownload = async () => {
   try {
+    // Track the download event
     const res = await fetch("/api/analytics/track", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: file.id, type: "download" }),
     });
-
     const data = await res.json();
-
     if (!res.ok || !data.success) {
       alert("Download tracking failed. Limit might be reached.");
       return;
     }
-
-    const response = await fetch(file.file_url);
-    const blob = await response.blob();
+    // Fetch the actual file
+    const fileRes = await fetch(file.file_url);
+    if (!fileRes.ok) throw new Error("File download failed");
+    const blob = await fileRes.blob();
+    const url = window.URL.createObjectURL(blob);
     const link = document.createElement("a");
-    link.href = window.URL.createObjectURL(blob);
+    link.href = url;
     link.download = file.file_name || "download";
     document.body.appendChild(link);
     link.click();
-    link.remove();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
   } catch (err) {
     console.error("Download error:", err);
     alert("Something went wrong. Please try again.");
@@ -103,7 +106,18 @@ const handleDownload = async () => {
 
   if (passwordRequired) {
     return (
-      <Card className="max-w-md mx-auto mt-20 shadow-md rounded-2xl">
+    <div>
+    <div className="absolute inset-0 z-[-1]">
+        <FlickeringGrid
+          squareSize={6}
+          gridGap={5}
+          className="w-full h-full opacity-70 z-[-1]"
+          color="#1a17b3"
+          maxOpacity={0.2}
+        />
+      </div>
+      <Card className="max-w-md mx-auto mt-20 shadow-md rounded-2xl bg-white">
+        
         <CardHeader>
           <CardTitle className="text-lg font-semibold text-gray-800">
             Enter Password
@@ -126,11 +140,23 @@ const handleDownload = async () => {
           </Button>
         </CardContent>
       </Card>
+                </div>
     );
   }
 
   return (
+    <div>
+        <div className="absolute inset-0 z-[-1]">
+        <FlickeringGrid
+          squareSize={6}
+          gridGap={5}
+          className="w-full h-full opacity-70 z-[-1]"
+          color="#1a17b3"
+          maxOpacity={0.2}
+        />
+      </div>
     <Card className="max-w-2xl mx-auto mt-12 shadow-md rounded-2xl">
+    
       <CardHeader>
         <CardTitle className="text-xl font-bold text-gray-800 truncate">
           {file.file_name}
@@ -145,11 +171,11 @@ const handleDownload = async () => {
             className="w-full rounded-lg shadow-sm"
           />
         ) : file.file_type?.startsWith("application/pdf") ? (
-          <iframe
+            <iframe
             src={file.file_url + "#page=1"}
             className="w-full h-[600px] rounded-lg shadow-sm"
             title={file.file_name}
-          />
+            />
         ) : (
           <p className="text-sm text-gray-500 italic">
             Preview not available for this file type.
@@ -164,6 +190,7 @@ const handleDownload = async () => {
         </Button>
       </CardContent>
     </Card>
+</div>
   );
 }
 

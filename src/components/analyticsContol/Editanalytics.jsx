@@ -49,7 +49,7 @@ export default function Editanalytics({ file }) {
   };
 
   return (
-    <Card className="my-6 shadow-sm rounded-2xl">
+    <Card className="my-2 shadow-sm rounded-2xl">
       <CardHeader>
         <CardTitle className="text-base font-medium text-gray-800">
           Edit Access Control

@@ -2,9 +2,12 @@ import FileCard from "@/components/filecard/Filecard";
 import InactiveFileCard from "@/components/filecard/InactiveFileCard";
 import { getKindeServerSession } from "@kinde-oss/kinde-auth-nextjs/server";
 import { supabase } from "@/lib/supabase";
+import { Card } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Separator } from "@/components/ui/separator";
+import { FlickeringGrid } from "@/components/ui/flickering-grid";
 
 export const dynamic = "force-dynamic";
-
 
 export default async function Uploadedfiles() {
   const { getUser } = getKindeServerSession();
@@ -12,14 +15,15 @@ export default async function Uploadedfiles() {
 
   if (!user) {
     return (
-      <div className="p-6 flex justify-center items-center h-64">
-        <p className="text-red-500 font-medium">
-          You must be logged in to view files.
-        </p>
-      </div>
+      <main className="container mx-auto px-4 py-16 mt-20">
+        <Card className="p-8 text-center">
+          <p className="text-red-500 font-medium">
+            You must be logged in to view files.
+          </p>
+        </Card>
+      </main>
     );
   }
-
 
   const { data: files, error } = await supabase
     .from("files")
@@ -30,62 +34,88 @@ export default async function Uploadedfiles() {
   if (error) {
     console.error("Error loading files", error);
     return (
-      <div className="p-6 flex justify-center items-center h-64">
-        <p className="text-red-500 font-medium">
-          Failed to load files. Please try again.
-        </p>
-      </div>
+      <main className="container mx-auto px-4 py-16 mt-20">
+        <Card className="p-8 text-center">
+          <p className="text-red-500 font-medium">
+            Failed to load files. Please try again.
+          </p>
+        </Card>
+      </main>
     );
   }
 
   if (!files || files.length === 0) {
     return (
-      <div className="p-6 flex flex-col items-center justify-center h-64 text-center">
-        <p className="text-gray-500 text-lg">You haven’t uploaded any files yet.</p>
-        <p className="text-sm text-gray-400 mt-1">
-          Upload files from your dashboard to see them here.
-        </p>
-      </div>
+      <main className="container mx-auto px-4 py-16 mt-20">
+        <Card className="p-8 text-center">
+          <h1 className="text-2xl font-semibold mb-4">Your Files</h1>
+          <Separator className="my-4" />
+          <p className="text-gray-500 text-lg">
+            You haven't uploaded any files yet.
+          </p>
+          <p className="text-sm text-gray-400 mt-2">
+            Upload files from your dashboard to see them here.
+          </p>
+        </Card>
+      </main>
     );
   }
 
+  const activeFiles = files.filter((file) => file.is_active);
+  const inactiveFiles = files.filter((file) => !file.is_active);
+
   return (
-    <div className="p-6">
-      <h1 className="text-3xl font-bold mb-8">Your Files</h1>
+    <main className="container mx-auto px-4 mt-25 mb-5">
+    <div className="absolute inset-0 z-[-1]">
+        <FlickeringGrid
+          squareSize={6}
+          gridGap={5}
+          className="w-full h-full opacity-70"
+          color="#1a17b3"
+          maxOpacity={0.2}
+        />
+      </div>
+      <div className="flex flex-col items-center text-center space-y-4 mb-8">
+        <h1 className="text-4xl font-bold tracking-tight">Your Files</h1>
+        <p className="text-lg text-gray-500">
+          Manage and track your uploaded files
+        </p>
+      </div>
 
-      <section className="mb-10">
-        <h2 className="text-xl font-semibold mb-4 text-green-600">
-          Active Files
-        </h2>
-        {files.some((file) => file.is_active) ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-            {files
-              .filter((file) => file.is_active)
-              .map((file) => (
-                <FileCard key={file.id} file={file} />
-              ))}
-          </div>
-        ) : (
-          <p className="text-gray-500 text-sm">No active files.</p>
-        )}
-      </section>
+      <Tabs defaultValue="active" className="w-full">
+        <TabsList className="grid w-full max-w-md mx-auto grid-cols-2 mb-8">
+          <TabsTrigger value="active">Active Files</TabsTrigger>
+          <TabsTrigger value="inactive">Inactive Files</TabsTrigger>
+        </TabsList>
 
-      <section>
-        <h2 className="text-xl font-semibold mb-4 text-gray-600">
-          Inactive Files
-        </h2>
-        {files.some((file) => !file.is_active) ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-            {files
-              .filter((file) => !file.is_active)
-              .map((file) => (
-                <InactiveFileCard key={file.id} file={file} />
-              ))}
-          </div>
-        ) : (
-          <p className="text-gray-500 text-sm">No inactive files.</p>
-        )}
-      </section>
-    </div>
+        <TabsContent value="active">
+          <Card className="p-6 backdrop-blur-lg ">
+            {activeFiles.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 auto-rows-fr">
+                {activeFiles.map((file) => (
+                  <FileCard key={file.id} file={file} />
+                ))}
+              </div>
+            ) : (
+              <p className="text-center text-gray-500 py-8">No active files.</p>
+            )}
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="inactive">
+          <Card className="p-6 ">
+            {inactiveFiles.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 auto-rows-fr">
+                {inactiveFiles.map((file) => (
+                  <InactiveFileCard key={file.id} file={file} />
+                ))}
+              </div>
+            ) : (
+              <p className="text-center py-8 ">No inactive files.</p>
+            )}
+          </Card>
+        </TabsContent>
+      </Tabs>
+    </main>
   );
 }
