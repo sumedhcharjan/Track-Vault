@@ -2,7 +2,7 @@ import Link from "next/link"
 
 export default function About() {
   return (
-    <main className="max-w-4xl mx-auto px-6 py-12">
+    <main className="mt-15 max-w-4xl mx-auto px-6 py-12">
       <h1 className="text-4xl font-bold text-gray-900 mb-6">About Track Vault</h1>
       <p className="text-lg text-gray-700 leading-relaxed mb-6">
         <span className="font-semibold">Track Vault</span> is a secure and

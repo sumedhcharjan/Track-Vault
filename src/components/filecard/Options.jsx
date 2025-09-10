@@ -26,7 +26,7 @@ export default function Options({ file }) {
 
   const handleCopy = async () => {
     try {
-      const link = `http://${NEXT_PUBLIC_API_URL}/public/${file.id}`;
+      const link = `${window.location.origin}/public/${file.id}`;
       await navigator.clipboard.writeText(
         `Here is the link to access your file: ${link}\nPassword: ${file.file_password}`
       );
