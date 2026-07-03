@@ -225,19 +225,65 @@ Axios is configured globally with a fallback URL of `http://localhost:3000/api` 
 * **Authentication**: Verifies *who* a user is. Managed externally by Kinde Auth. Users are redirected to Kinde's secure identity page, authenticate, and redirect back. Kinde drops secure, encrypted JWT cookies.
 * **Authorization**: Verifies *what* a user is allowed to do. In `src/app/uploadedfiles/[id]/page.jsx` or `src/app/uploadedfiles/page.jsx`, the server verifies the user session. If a user attempts to access file analytics for a file whose `user_id` doesn't match their own Kinde ID, they are redirected away.
 
-### 3. Caching & Atomic Operations (Upstash Redis)
-* **Concept**: Rather than running `UPDATE files SET views = views + 1` in Supabase for each view event (which locks the database row and causes slow disk operations), the app offloads hit tracking to Upstash Redis.
-* **Redis Commands**: 
-  - `INCR`: An atomic increment operation. Even if 1,000 users load the same file at the exact same millisecond, Redis will process the increments sequentially and accurately without race conditions.
-  - `GET`/`SET`: Extremely fast key-value lookups stored in RAM.
+### 3. Storage Tiering & State Management (Blob vs. Cache)
+* **Blob Storage (AWS S3)**: Used for high-durability storage of heavy, unstructured binary files. It has 99.999999999% durability and offloads the bandwidth of serving files from the application servers.
+* **In-Memory Caching (Upstash Redis)**: Used for extremely fast, transient, high-write data (real-time analytics, view/download counters).
+* **Supabase (Postgres)**: Acts as the transactional system of record for structured relational metadata (access limits, file keys, user profiles).
+* **Architectural Rationale**: By offloading atomic logs (e.g. view increments) to Redis, we protect the primary SQL database from write-amplification and table locking under concurrent accesses.
 
-### 4. Client-Side Polling vs. WebSockets
-* **Concept**: In `Analytics.jsx`, the client polls the database statistics by running `setInterval` every 5 seconds.
-* **Trade-off**: Polling is easy to implement but highly inefficient. If 1,000 dashboard users leave their analytics tabs open, the server receives 200 requests *every single second* just to check if numbers changed.
+### 4. Client-Side Polling Strategies (Short Polling)
+* **What is used**: In `Analytics.jsx`, the app implements **Short Polling** using `setInterval` to request file statistics from `/api/analytics/get?id=fileId` every 5 seconds.
+* **Short Polling vs. Long Polling**:
+  - **Short Polling**: The client periodically requests the server for updates. The server responds immediately (with data or an empty payload) and closes the connection. It is simple to implement but incurs high HTTP header overhead and redundant connections.
+  - **Long Polling**: The client opens a request, and the server **holds the connection open** until new data is available or a timeout is reached. Once data updates, the server responds, and the client opens a new long-poll request. This reduces latency but consumes server connection sockets.
+  - **WebSockets / Server-Sent Events (SSE)**: Keep a persistent TCP connection alive. For a production real-time analytics system, WebSockets or SSE is superior to short polling as it cuts down connection overhead entirely.
+
+### 5. Next.js Page Generation & Rendering Strategies
+Next.js supports multiple page compilation strategies. This project utilizes three different models across its routes:
+* **Server-Side Rendering (SSR)**: Used on the public download page `/public/[id].jsx` (`getServerSideProps`). Every single page request triggers server execution to check database limits and passwords before generating the HTML. This is mandatory for real-time security gates.
+* **Incremental Static Regeneration (ISR)**: Used on the dashboard analytics page `/uploadedfiles/[id]/page.jsx` (`export const revalidate = 10`). Next.js caches the page statically and serves it instantly. If a request arrives after 10 seconds, Next.js rebuilds the page in the background. This optimizes load speed and protects the database from heavy query loads when checking historic logs.
+* **Dynamic Rendering**: Used on `/uploadedfiles/page.jsx` (`export const dynamic = "force-dynamic"`). Tells the compiler that the page must be rendered on the fly for each request because it loads unique data depending on the logged-in Kinde session.
+* **Static Site Generation (SSG)**: Used on `/about/page.jsx`. The page contains static markup and is generated once during build time, loading instantly from the server without hitting the DB.
 
 ---
 
-## 6. Database Design
+## 6. High-Level System Design (HLD) & Deployment
+
+The HLD of Track Vault focuses on high availability, stateless compute tiers, and separation of storage concerns.
+
+### HLD Architecture Diagram
+```
+                     [ DuckDNS Domain: trackvault.duckdns.org ]
+                                        │
+                                        ▼
+                         [ Caddy Reverse Proxy & SSL ]
+                                  (Port 80/443)
+                                        │
+                    ┌───────────────────┴───────────────────┐
+                    ▼ (Load Balanced / Round Robin)         ▼
+             [ EC2 Instance 1 ]                      [ EC2 Instance 2 ]
+             (Next.js Server - PM2)                  (Next.js Server - PM2)
+                    │                                       │
+                    ├───────────────────┬───────────────────┤
+                    ▼                   ▼                   ▼
+           [ Upstash Redis ]    [ Supabase Postgres ]  [ AWS S3 Bucket ]
+           (Transient Cache)    (Relational metadata)  (File Object Store)
+```
+
+### Deployment Details
+1. **DNS Resolution (DuckDNS)**:
+   - DuckDNS acts as the dynamic DNS mapping provider, pointing `trackvault.duckdns.org` to the external IP.
+2. **Reverse Proxy & TLS (Caddy)**:
+   - Caddy runs at the entry point of the network. It reverse proxies requests to the active Next.js backend servers.
+   - Caddy automatically provisions and renews SSL/TLS certificates via Let's Encrypt, securing the public pages.
+3. **Stateless Scale-Out Tier (2x AWS EC2 Instances)**:
+   - The Next.js application is deployed across **2 EC2 Instances** in an Active-Active setup.
+   - **PM2** runs on each EC2 instance as a process manager to keep the Node.js threads alive, auto-restart on crashes, and manage logs.
+   - **The Stateless Rationale**: Because the Next.js servers are stateless, the architecture scales horizontally. User sessions are verified via Kinde Auth cookie tokens, and analytics are synced externally to Upstash Redis. If Instance 1 fails, Caddy routes all traffic to Instance 2 without session loss or data corruption.
+
+---
+
+## 7. Database Design
 
 Track Vault uses a relational PostgreSQL database (hosted on Supabase) with two core tables.
 
@@ -275,7 +321,7 @@ The database is in **Third Normal Form (3NF)**.
 
 ---
 
-## 7. Interview Questions Section
+## 8. Interview Questions Section
 
 ### Q1: Why did you use Upstash Redis for analytics? Why not just use your main Supabase PostgreSQL database?
 * **Answer**: Storing real-time counters (like views and downloads) in a relational database like PostgreSQL leads to **high write load**. Every single view requires an disk update transaction (`UPDATE files SET views = views + 1`), which blocks the row, causes lock contention under high traffic, and degrades performance. Redis is an **in-memory** data store. It processes writes in RAM, leading to sub-millisecond latencies. Also, operations like `INCR` are atomic, avoiding race conditions where two simultaneous views only increment the counter by one.
@@ -292,27 +338,34 @@ The database is in **Third Normal Form (3NF)**.
   3. The client uploads the file **directly from the browser to AWS S3** via a `PUT` request to that presigned URL.
   4. Once uploaded, the client calls a quick callback endpoint on the server to log the database entry. This bypasses the Next.js server completely, saving server memory, bandwidth, and execution time.
 
----
-
-## 8. Cross Questions (Deep Interview Drill)
-
-### Concept: JSON Web Tokens (JWT) & Authentication
-* **Q**: "Where is the user's authentication token stored?"
-* **A**: Kinde Auth stores sessions using secure, HTTP-only, encrypted cookies in the browser.
-* **Cross-Q**: *Why are HTTP-only cookies safer than localStorage?*
-* **Cross-A**: Cookies marked as `HttpOnly` cannot be read or modified by client-side JavaScript. This protects the session tokens from Cross-Site Scripting (XSS) attacks. If a malicious script is injected into the page, it cannot steal the session cookie.
-* **Cross-Q**: *What vulnerability does using cookies introduce, and how do you mitigate it?*
-* **Cross-A**: It introduces Cross-Site Request Forgery (CSRF). Since browsers automatically append cookies to all requests sent to the origin, an attacker could lure a logged-in user to a malicious site that submits forms targeting our backend APIs. We mitigate CSRF by using `SameSite=Strict` or `SameSite=Lax` cookie flags, verifying custom headers on API requests, or using anti-CSRF tokens.
-
-### Concept: Redis Data Consistency & Durability
-* **Q**: "What happens if your Redis instance restarts or crashes? Are all analytics numbers lost?"
-* **A**: Upstash Redis has persistence enabled by default (backed up to disk/durable storage). However, because Redis is primarily an in-memory store, there is always a tiny risk of losing the most recent writes if a catastrophic crash occurs.
-* **Cross-Q**: *If views/downloads count is critical business data, how would you design a write-back system to ensure eventual consistency with PostgreSQL?*
-* **Cross-A**: I would implement a **Write-Behind (Write-Back) Caching** pattern. The client continues to write instantly to Redis. A background cron job (or an asynchronous worker pipeline) would periodically read modified counters from Redis in batches (e.g., every 5 minutes) and write the aggregated counts back to Supabase. This keeps database writes low while ensuring permanent durability.
+### Q4: Why did you deploy the application using two EC2 instances with Caddy instead of a single server?
+* **Answer**: Deploying on two EC2 instances provides **high availability (HA)** and **horizontal scaling**. If a single EC2 server crashes, is overloaded, or undergoes maintenance, the system experiences downtime. By placing a **Caddy reverse proxy** in front of two EC2 instances, Caddy acts as a load balancer (using round-robin or least-connections), distributing user traffic across both backends. The application is completely stateless (session cookies, Redis cache, S3 file storage), allowing both servers to handle any request interchangeably. Caddy also handles automated SSL/TLS certificates with Let's Encrypt.
 
 ---
 
-## 9. Optimization & Improvements (Senior Critique)
+## 9. Cross Questions (Deep Interview Drill)
+
+### Concept: Next.js Rendering & ISR
+* **Q**: "Why did you use ISR (Incremental Static Regeneration) with revalidate = 10 for the analytics page?"
+* **A**: ISR allows us to serve the analytics dashboard statically from the server cache, keeping the initial load time at 0ms. It regenerates the page in the background at most once every 10 seconds, updating the historical charts without hitting Supabase on every page load.
+* **Cross-Q**: *If a user updates access rules (e.g. changes password or expiry), does ISR cause a 10-second delay before the changes are live on the public page?*
+* **Cross-A**: No, because the public download page `/public/[id].jsx` is rendered using **SSR (Server-Side Rendering)** with `getServerSideProps`. While the owner's analytics page is cached for 10 seconds via ISR, the recipient's file-access gateway runs on SSR, checking the live Supabase database on every request. Therefore, security rule updates are instantly active for the recipient.
+
+### Concept: Redis Data Consistency & Stateless Compute
+* **Q**: "Since you have 2 EC2 instances, how do they sync the view counts?"
+* **A**: Because the Next.js app on both servers connects to a single external centralized cache (Upstash Redis), both instances read and write from the exact same counter keys.
+* **Cross-Q**: *What if two users view the file at the exact same time through Server 1 and Server 2? How does Redis guarantee correct counts?*
+* **Cross-A**: Redis is single-threaded and executes commands sequentially. When Server 1 issues `INCR` and Server 2 issues `INCR` concurrently, Redis serializes these calls, performing two distinct atomic updates. This guarantees the count increases by exactly two, avoiding write race conditions.
+
+### Concept: Caddy vs Nginx
+* **Q**: "Why did you choose Caddy as a reverse proxy instead of Nginx?"
+* **A**: Caddy was chosen for its developer experience, especially its **automatic SSL provisioning and renewal** from Let's Encrypt out-of-the-box. Nginx requires manual setup of Certbot, Cron jobs for renewals, and complex config files. Caddy's configuration file (Caddyfile) is clean and consists of just a few lines.
+* **Cross-Q**: *What are the performance limitations of Caddy compared to Nginx in production?*
+* **Cross-A**: Nginx is written in C and is highly optimized for raw static file throughput and high concurrency, consuming very little memory. Caddy is written in Go; while highly performant and concurrent, it consumes slightly more memory under load. For a dynamic application like Next.js where Node.js does the rendering, the difference in reverse proxy performance is negligible.
+
+---
+
+## 10. Optimization & Improvements (Senior Critique)
 
 During review, several critical security flaws, design errors, and bad practices were discovered in the codebase:
 
@@ -336,10 +389,10 @@ During review, several critical security flaws, design errors, and bad practices
 
 ---
 
-## 10. Quick Revision Notes
+## 11. Quick Revision Notes
 
 ### ⚡ 30-Second Elevator Pitch
-> "**Track Vault** is a secure, self-destructing file sharing application built in Next.js. It allows users to upload files to AWS S3, set expiration rules (expiry dates, password locks, and view/download limits), and monitors usage statistics in real-time using Upstash Redis. When access criteria are breached, it auto-deletes files from cloud storage to protect privacy."
+> "**Track Vault** is a secure, self-destructing file sharing application built in Next.js. It allows users to upload files to AWS S3, set expiration rules (expiry dates, password locks, and view/download limits), and monitors usage statistics in real-time using Upstash Redis. When access criteria are breached, it auto-deletes files from cloud storage to protect privacy. The application is deployed horizontally across two EC2 instances behind a Caddy reverse proxy using DuckDNS."
 
 ### ⚠️ Common Interview Traps to Avoid
 1. **"Is your password locking secure?"**
@@ -353,4 +406,6 @@ During review, several critical security flaws, design errors, and bad practices
 * **S3 Presigned URL**: A temporary access URL generated by the bucket owner to allow reading or writing objects without public permissions.
 * **Atomic Operation (`INCR`)**: Database operations that run entirely or not at all, preventing dirty reads or count sync errors.
 * **Hydration**: The process where client-side React attaches event listeners to pre-rendered HTML sent by Next.js Server-Side Rendering.
-* **IDOR (Insecure Direct Object Reference)**: A security vulnerability where a system exposes a reference to an internal implementation object, allowing attackers to access/manipulate records without proper authorization.
+* **Short Polling**: A client querying the server for updates at fixed time intervals (used in our analytics dashboard).
+* **Caddy Reverse Proxy**: A modern HTTP web server written in Go that routes incoming client requests to backend Node/Next instances, handling automatic HTTPS out-of-the-box.
+* **Stateless Application**: A system design pattern where the application server doesn't retain local session state. This allows any server instance (e.g., in our 2x EC2 setup) to handle any user request seamlessly.
