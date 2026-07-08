@@ -1,411 +1,565 @@
 # 📂 Track Vault: Complete Revision & Interview Preparation Guide
 
-Welcome to the master revision guide for **Track Vault**. This document has been prepared to serve as a comprehensive self-study and revision resource for web development interviews. It covers the project's architecture, flow, files, tech stack, database schema, design decisions, bad practices, security vulnerabilities, and answers to potential interview questions.
+Welcome to the master revision guide for **Track Vault**. This document serves as a comprehensive, structured self-study and revision resource for web development interviews. It covers the project's architecture, flow, files, tech stack, database schema, design decisions, security vulnerabilities, and detailed model answers to potential interview questions.
 
 ---
 
 ## 1. Project Overview
 
-### What Problem Track Vault Solves
-Standard file-sharing solutions (like Google Drive, Dropbox, or WeTransfer) suffer from **poor post-sharing control**. Once a user shares a link:
-1. They cannot easily limit how many times the file is downloaded or viewed.
-2. They cannot guarantee the file will self-destruct from the cloud after access or expiration.
-3. They cannot view real-time statistics of accesses (views, downloads, last-accessed timestamps) without heavy analytics platforms.
+### What Project Track Vault Does (Plain Language)
+**Track Vault** is a secure, self-destructing file-sharing application. It allows users to upload files of various formats (images, PDFs, text, etc.) to a private cloud bucket, set custom access control rules (such as expiration dates, download/view limits, or passwords), and track file-access statistics (total views, total downloads, and last accessed timestamp) in real-time. 
 
-**Track Vault** provides an easy-to-use, secure, self-hosted file vault that allows users to upload files, configure strict access controls (passwords, view limits, download limits, expiry times), and track live usage statistics. 
+### What Problem It Solves, and For Whom
+Traditional cloud sharing services (like Google Drive, Dropbox, or WeTransfer) suffer from **poor post-sharing control**. Once a link is shared:
+1. **Access Cannot Be Dynamic**: It is difficult to restrict a file to exactly one download or a few views.
+2. **Self-Destruction is Lacking**: Files linger in the cloud indefinitely unless manually deleted.
+3. **No Granular Real-Time Auditing**: Tracking exact views/downloads without enterprise-level logs is impossible.
+4. **Security vs Convenience**: Locking links behind shared organizational logins forces recipients to register accounts.
 
-### Core Objective
-To enable **secure, private, and self-destructing file sharing** with granular controls and high-throughput real-time tracking, combining AWS S3 (durable storage), Supabase (relational metadata), and Upstash Redis (high-performance atomic transient analytics).
+**Track Vault** solves these problems for **privacy-conscious individuals, freelancers, and businesses** sharing sensitive information (e.g., contracts, financial statements, or temporary draft designs). It ensures files are automatically destroyed from both the database and physical cloud storage when criteria are met, without requiring the recipient to create an account.
 
-### Main Features
-- **Secure File Upload**: Files are renamed with UUIDs and uploaded securely to an AWS S3 bucket.
-- **Granular Access Control Rules**:
-  - Expiry date and time.
-  - Maximum views and maximum downloads limit.
-  - Optional password locking.
-  - **Self-Destruct Toggles**: Option to delete the physical S3 object automatically when the file expires (`delete_on_expire`) or when limits are reached (`delete_on_limit`).
-- **Real-Time Analytics**: Tracks total views, total downloads, and the exact timestamp of the last access using Redis.
-- **Active vs. Inactive Split**: Active files are available for download; expired/deleted files are automatically filtered into an "Inactive Files" tab displaying historical analytics.
-
-### User Flow (Start-to-End)
-```mermaid
-graph TD
-    A[Landing Page /] -->|Kinde Auth| B[User Logs In / Registers]
-    B -->|api/register| C[Sync User Profile to Supabase]
-    C --> D[User Dashboard /dashboard]
-    D -->|Upload File| E[api/file POST: Upload to S3, Store Meta in Supabase]
-    E --> F[Your Files /uploadedfiles]
-    F -->|Edit Access Controls| G[api/analytics/set: Config rules in Supabase]
-    F -->|Copy URL| H[Public File URL /public/:id]
-    H -->|getServerSideProps| I{File Expired or View Limit Exceeded?}
-    I -->|Yes| J[Trigger api/deletepipeline & Show Unavailable]
-    I -->|No| K{Password Gate Active?}
-    K -->|Yes| L[User enters password -> Client side unlocks]
-    K -->|No / Unlocked| M[Render File Preview & Download button]
-    M -->|Load page| N[Incr Redis views, set lastAccess]
-    M -->|Click Download| O[Incr Redis downloads, Fetch S3 URL, Save file]
-```
+### What Makes This Project Non-Trivial
+Unlike a basic "File Upload" tutorial, Track Vault implements several complex, real-world engineering concepts:
+1. **Multi-Tier Storage Separation**: Rather than storing heavy binary files in a relational database or tracking fast-changing analytics counters in SQL, Track Vault splits storage:
+   - **AWS S3** handles high-durability binary blob storage.
+   - **Supabase PostgreSQL** manages structured relational metadata (rules, ownerships, file keys).
+   - **Upstash Redis** processes high-throughput, transient, atomic analytics writes (views, downloads).
+2. **Dynamic Self-Destruct Deletion Pipeline**: It features an automatic deletion cascade (`src/app/api/deletepipeline/route.js`) that physically purges S3 objects and marks metadata inactive in the DB. This is triggered dynamically in real-time by a recipient's access checks on the server during page rendering.
+3. **Hybrid Routing Model**: The application merges the Next.js **App Router** (for authenticated, layout-heavy dashboards: `/dashboard`, `/uploadedfiles`) with the **Pages Router** (for dynamic, Server-Side Rendered (SSR) public share gateways: `/public/[id]`), exploiting the specific benefits of both paradigms.
 
 ---
 
-## 2. Folder Structure Explanation
+## 2. Tech Stack Summary
 
-Here is the structural map of the Track Vault codebase and the role of each directory/file:
+The following table summarizes the dependencies declared in [package.json](file:///c:/Users/sumed/code/web%20dev/projects/track-vault/package.json):
 
+| Technology/Library | Version | Why It Was Chosen (Based on Code Implementation) |
+| :--- | :--- | :--- |
+| **Next.js** | `15.4.7` | Provides the foundational hybrid routing (App + Pages Router) and handles server-side execution (`getServerSideProps`) for live security checks. |
+| **React** | `19.1.0` | UI library used to build interactive layouts, client-side state hooks (`useState`), and handle hydration. |
+| **Kinde Auth** | `^2.8.6` | Managed OAuth 2.0 / OIDC provider used for secure uploader sessions, verified via JWT cookies on the server (`getKindeServerSession`) and client hooks (`useKindeAuth`). |
+| **Supabase JS** | `^2.55.0` | Client library for PostgreSQL. Used to persist file rules and uploader accounts, running SQL operations like `insert`, `upsert`, and `update`. |
+| **Upstash Redis** | `^1.35.3` | Serverless HTTP-based Redis client. Used for lightning-fast atomic operations (`incr`) on view/download metrics, avoiding DB locks. |
+| **AWS S3 Client** | `^3.873.0` | Official AWS SDK v3 client used to upload (`PutObjectCommand`) and delete (`DeleteObjectCommand`) file binaries from the S3 bucket. |
+| **Axios** | `^1.11.0` | Client-side HTTP wrapper configured globally with a fallback API base URL and `withCredentials: true` to forward session cookies to API handlers. |
+| **Lucide React** | `^0.540.0` | Vector icon library used for responsive, type-specific file-card icons. |
+| **Tailwind CSS / PostCSS**| `^4.1.12` | Styling system used for rapid, utility-first layout composition. |
+| **Radix UI Primitives** | Various | Headless accessible primitives (Tabs, Checkbox, Dropdown-Menu, Avatar) used to construct standard UI components. |
+| **Sonner** | `^2.0.7` | Lightweight toast notification engine used to dispatch asynchronous state confirmations (e.g., "Link copied", "File uploaded"). |
+| **Bcrypt / Bcryptjs** *(Dangling)* | `^6.0.0` | Declared and imported in `/api/file/route.js` (lines 6, 38) but commented out. It represents a planned but unimplemented feature for password hashing. |
+| **TSParticles** *(Dangling)* | `^3.9.1` | Installed dependency for firefly particles, but not referenced or used in any source files under `/src`. |
+
+---
+
+## 3. Project Structure Walkthrough
+
+### Folder and File Tree
 ```
 track-vault/
 ├── src/
-│   ├── app/                    # Next.js App Router (Client & Server Components)
-│   │   ├── about/              # Static informational page about Track Vault
-│   │   ├── api/                # Next.js Route Handlers (Backend API endpoints)
+│   ├── app/                      # Next.js App Router (Authenticated Dashboard & APIs)
+│   │   ├── about/                # Static "About" page (SSG)
+│   │   │   └── page.jsx          # Static marketing/informational content
+│   │   ├── api/                  # Next.js Route Handlers (Backend API endpoints)
 │   │   │   ├── analytics/
-│   │   │   │   ├── get/        # GET: Fetches live stats from Redis (views, downloads, lastAccess)
-│   │   │   │   ├── set/        # POST: Updates file access settings in Supabase
-│   │   │   │   └── track/      # POST: Increments view/download counter in Redis
-│   │   │   ├── auth/           # Kinde OAuth route wildcard dynamic router
-│   │   │   ├── deletepipeline/ # DELETE: Handles physical S3 deletion and DB status updates
-│   │   │   ├── file/           # POST (upload to S3 & DB insert), DELETE (remove file)
-│   │   │   └── register/       # POST: Syncs authenticated Kinde user with DB 'users' table
-│   │   ├── dashboard/          # Secure upload workspace
-│   │   ├── uploadedfiles/      # User's file vault manager (Active vs. Inactive)
-│   │   │   └── [id]/           # File-specific live analytics and management panel
-│   │   ├── layout.jsx          # Root layout defining Providers, Toaster, Navbar, and Footer
-│   │   └── page.jsx            # Landing page (Welcome screen, Features, Login links)
-│   ├── pages/                  # Next.js Pages Router (Dynamic SSR for public sharing)
+│   │   │   │   ├── get/          # GET: Polls Redis analytics (views, downloads, lastAccess)
+│   │   │   │   │   └── route.js
+│   │   │   │   ├── set/          # POST: Updates file metadata rules in Supabase
+│   │   │   │   │   └── route.js
+│   │   │   │   └── track/        # POST: Atomically increments view/download metrics in Redis
+│   │   │   │       └── route.js
+│   │   │   ├── auth/             # Wildcard endpoint routing Kinde Auth callbacks
+│   │   │   │   └── [kindeAuth]/
+│   │   │   │       └── route.js
+│   │   │   ├── deletepipeline/   # DELETE: Triggers S3 deletion & sets is_active = false in DB
+│   │   │   │   └── route.js
+│   │   │   ├── file/             # POST: Handles S3 upload & DB insert; DELETE: Removes file
+│   │   │   │   └── route.js
+│   │   │   └── register/         # POST: Synchronizes authenticated Kinde user with DB users table
+│   │   │       └── route.js
+│   │   ├── dashboard/            # Uploader workspace (Client Component)
+│   │   │   └── page.jsx          # File upload area, calls API and triggers user registration sync
+│   │   ├── uploadedfiles/        # User's file vault management panel
+│   │   │   ├── [id]/             # Dynamic route for file analytics (ISR: revalidate = 10)
+│   │   │   │   └── page.jsx      # Consolidates Preview, Analytics, and Editanalytics components
+│   │   │   └── page.jsx          # Displays user's active/inactive files (Dynamic server component)
+│   │   ├── layout.jsx            # Global Next.js App Router layout wrapping Providers & styling
+│   │   └── page.jsx              # Landing page (Welcome screen, Features, Login links)
+│   ├── pages/                    # Next.js Pages Router (Public Dynamic File Sharing)
 │   │   └── public/
-│   │       └── [id].jsx        # Public file download page with password checking and limits
-│   ├── components/             # Reusable UI & Layout Components
-│   │   ├── analyticsContol/    # Components for File analytics rendering & access rules settings
-│   │   │   ├── Analytics.jsx   # Polls /api/analytics/get and displays live graphs/stats
-│   │   │   ├── Editanalytics.jsx # Form containing inputs for password, expiry, and limits
-│   │   │   └── Preview.jsx     # Handles conditional renders for PDFs, Images, and Text files
-│   │   ├── filecard/           # File representation modules
-│   │   │   ├── Filecard.jsx    # Card structure for active files with quick action links
-│   │   │   ├── InactiveFileCard.jsx # Card for inactive files (shows historic Redis stats)
-│   │   │   └── Options.jsx     # Copy, Download, and Delete buttons
-│   │   ├── ui/                 # Shadcn UI base components (Separators, Buttons, Cards)
-│   │   ├── Footer.jsx          # Footer containing Github repo links
-│   │   ├── Navbar.jsx          # Navigation panel displaying Kinde Auth toggle states
-│   │   └── Provider.jsx        # Kinde Auth context wrapper
-│   ├── lib/                    # Initialization files for client connections
-│   │   ├── axios.js            # Axios client with base URL configuration
-│   │   ├── redis.js            # Upstash Redis client configuration
-│   │   ├── s3.js               # AWS S3 Client setup using AWS SDK v3
-│   │   ├── supabase.js         # Supabase JS client config
-│   │   └── utils.js            # Tailwind merge utility helper
+│   │       └── [id].jsx          # Dynamic public sharing gateway (SSR: getServerSideProps)
+│   ├── components/               # Reusable UI & Layout Components
+│   │   ├── analyticsContol/      # Components for file monitoring & control
+│   │   │   ├── Analytics.jsx     # Live analytical cards with 5s short-polling interval
+│   │   │   ├── Editanalytics.jsx # Form updating access rules (password, limits, expiry)
+│   │   │   └── Preview.jsx       # Custom iframe/image viewer based on MIME type
+│   │   ├── filecard/             # Card representations of user assets
+│   │   │   ├── Filecard.jsx      # Handles active file representation (image preview or icon helper)
+│   │   │   ├── InactiveFileCard.jsx # Renders inactive files with historical Redis stats (SSR)
+│   │   │   └── Options.jsx       # Quick controls: Copy URL, Download, Delete, and Edit link
+│   │   ├── ui/                   # Shadcn UI primitives
+│   │   ├── Footer.jsx            # Static bottom layout
+│   │   ├── Navbar.jsx            # Top layout displaying user profile and Kinde Auth toggles
+│   │   └── Provider.jsx          # Client-side Kinde Auth wrapper
+│   ├── lib/                      # Core initialization and configuration clients
+│   │   ├── axios.js              # Custom Axios instance pointing to base API url
+│   │   ├── redis.js              # Instantiates Upstash Serverless Redis client
+│   │   ├── s3.js                 # Instantiates AWS SDK v3 S3 client
+│   │   ├── supabase.js           # Instantiates Supabase Postgres client
+│   │   └── utils.js              # Tailwind class merging utility (clsx + tailwind-merge)
 │   └── styles/
-│       └── globals.css         # Tailwind directives and CSS definitions
-├── package.json                # Project dependencies and startup scripts
-└── README.md                   # Repository documentation
+│       └── globals.css           # Tailwind v4 directives and animations
+├── package.json                  # Dependencies, scripts, and build metadata
+└── README.md                     # Core project instructions
 ```
 
-### Key File Relationships & Connections:
-* **The Auth Provider Loop**: `src/components/Provider.jsx` wraps the application in `layout.jsx`. The `Navbar.jsx` reads server session info via `getKindeServerSession()`, while client-side routes (like `dashboard/page.jsx`) read user data via the client hook `useKindeAuth()`.
-* **API Client**: Frontend client components (e.g., `Editanalytics.jsx`, `Options.jsx`) use `src/lib/axios.js` as their HTTP client to perform API calls targeting endpoints inside `src/app/api/`.
-* **Database & Caching Bridge**: When a public user accesses a shared file on `src/pages/public/[id].jsx`, `getServerSideProps` fetches persistent metadata from Supabase (`src/lib/supabase.js`) and logs/increments live tracking numbers in Upstash Redis (`src/lib/redis.js`).
+### Major Directory Responsibilities
+- **`src/app/`**: Next.js App Router root. Handles static rendering (e.g. `about/page.jsx`), authenticated dashboard modules (`dashboard/page.jsx` & `uploadedfiles/page.jsx`), and backend API endpoint routes (`/api/...`).
+- **`src/pages/`**: Next.js Pages Router root. Reserved strictly for public-facing, dynamic pages requiring Server-Side Rendering (`getServerSideProps`) like `public/[id].jsx` to validate access parameters on every request.
+- **`src/components/`**: House of React components. Subdivided into generic layout blocks (Navbar, Footer), Shadcn primitive components (`ui/`), and specific features (`filecard/` for dashboard cards, `analyticsContol/` for monitoring).
+- **`src/lib/`**: SDK configurations. Isolates environment variables and clients (AWS S3, Supabase, Upstash Redis, Axios) to promote singletons and prevent connection bloat during Next.js hot reloads.
 
 ---
 
-## 3. Full Code Flow
+### Step-by-Step Data and Request Flows
 
-### 1. Backend Request Lifecycle (Upload Event)
-1. **Frontend Call**: Client makes a POST request to `/api/file` passing a `FormData` object containing the file binary, the original filename, and the `user_id`.
-2. **Body Parsing**: Next.js route handler receives request, parses the multipart form data using `await req.formData()`.
-3. **File Buffering**: The file binary is extracted, converted into an `ArrayBuffer`, and then into a Node.js `Buffer` in memory.
-4. **S3 Upload**: A `PutObjectCommand` is issued to `s3Client` to write the buffer into the bucket. The target key is randomized using `uuidv4()`.
-5. **Supabase Record**: A row is inserted into the `files` table containing S3 url, file size, mime-type, user owner reference, and UUID key.
-6. **Response**: JSON status 200 returned with the database row structure.
-
-### 2. Frontend Rendering Lifecycle (Analytics Dashboard)
-1. **Initial SSR**: User visits `/uploadedfiles/[id]`. Next.js processes `FileAnalyticsPage` on the server.
-2. **Server-Side Checks**: Authenticates user using Kinde. Fetches file details from Supabase. Queries Upstash Redis for views, downloads, and last accessed timestamp in parallel using `Promise.all()`.
-3. **HTML Generation**: Hydrates components and sends pre-rendered HTML to the client browser.
-4. **Client Hydration & Polling**: The page mounts. The `Analytics` component initializes a `useEffect` loop that fires a GET request to `/api/analytics/get?id=fileId` every 5 seconds.
-5. **Re-rendering**: Live numbers on screen dynamically update without page reloads.
-
-### 3. API Calling Flow
+#### 1. Authentication and Registration Sync Flow
 ```
-[Client Components] -> [Axios Base Config] -> [Next.js Route Handler] -> [Cloud Service S3/DB]
-```
-Axios is configured globally with a fallback URL of `http://localhost:3000/api` and `withCredentials: true`. This ensures cookie sessions (like Kinde tokens) propagate safely to API endpoints.
-
-### 4. Database Interaction Flow
-- Supabase acts as the persistent system of record.
-- **Reads**: Performed during page loads on `/uploadedfiles` (displays cards) and `/public/[id]` (validates parameters).
-- **Writes**: Performed when creating files (`insert`) or editing access rules (`update` in `src/app/api/analytics/set/route.js`).
-- **Synchronizations**: The `/api/register` route runs an `upsert` query on conflict with user email, making sure user registration is idempotent.
-
-### 5. Authentication Flow
-```
-[User Click Login] ──> [Redirect to Kinde OAuth Page]
-                             │
-                             ▼
-[Redirect back to App] ──> [Next.js Auth Route Handler]
-                             │
-                             ▼
-[Sync Session Cookie]  ──> [/dashboard reads useKindeAuth()]
-                             │
-                             ▼
-[Register useEffect]  ──> [POST /api/register to insert DB User]
+[User Clicks "Get Started"] ──> Triggers Kinde OAuth Login Redirect ──> User Authenticates on Kinde Server
+                                                                                  │
+                                                                                  ▼
+[App /dashboard loads] <── Kinde returns encrypted session cookies <── Redirects back to Application
+         │
+         ├──> useKindeAuth() hook parses user credentials in client state
+         │
+         └──> useEffect triggers client POST request to /api/register
+                                   │
+                                   ▼
+                       [Route Handler: /api/register]
+                                   │
+                                   ├──> getKindeServerSession() reads cookies, extracts user ID and email
+                                   │
+                                   ├──> supabase.from("users").upsert(...) locks record in database
+                                   │
+                                   └──> Returns JSON response indicating registration sync success
 ```
 
----
-
-## 4. File-by-File Deep Breakdown
-
-### 📂 `src/pages/public/[id].jsx` (Dynamic Shared Access Page)
-* **Purpose**: Serves files to public users, enforces security gates (passwords, limits, expiry), and collects downloads and views analytics.
-* **Logic Explanation**: 
-  - `getServerSideProps`: Executes strictly on the server for each page request.
-    1. Fetches metadata of the file by ID.
-    2. Validates if the file is expired (current timestamp vs `expires_at`).
-    3. If expired, and `delete_on_expire` is checked, sends a DELETE request to `/api/deletepipeline` to clean up AWS S3 and mark it inactive.
-    4. If active, increments the view counter in Redis (`file:id:views`) and records current timestamp under `file:id:lastAccess`.
-    5. Validates if `max_views` limit is breached. If so, triggers `/api/deletepipeline` and returns an expired state prop.
-    6. Returns `fileMeta` prop to the frontend component.
-  - **React component**:
-    - Checks if `file.expired` is true; renders a warning card.
-    - If `file.file_password` exists, displays a password text box. When submitted, checks if input matches `file.file_password` on the client.
-    - If correct, renders file preview (MIME type matching for images, pdf preview inside an `iframe`, or a download button).
-    - When download is clicked, triggers `handleDownload`: calls `/api/analytics/track` to increment download counter, fetches the raw S3 URL, converts it to a blob, and programmatically triggers browser download.
-* **Inputs & Outputs**:
-  - Input: Route parameters (containing file ID).
-  - Output: HTML page rendering the unlocked file or password gate.
-* **Dependencies**: `supabase`, `redis`, `api` (axios instance), `FlickeringGrid`, UI components.
-* **Edge Cases Handled**: File not found, file expired, view limits reached, PDF preview iframe rendering, download limits tracking.
-* **Critiques**:
-  - **Severe Security Bug**: Client-side password validation! `fileMeta` containing `file.file_password` is sent to the client browser in plain text before password input is even validated. Anyone can open devtools or view `__NEXT_DATA__` and see the password.
-  - **Loopback Latency**: Calling `api.delete('/deletepipeline')` inside `getServerSideProps` makes a local network loopback request instead of directly invoking DB/S3 client functions in-process.
-
-### 📂 `src/app/api/file/route.js` (Upload/Delete Route Handler)
-* **Purpose**: Main file pipeline. Creates S3 objects and Supabase rows; physically destroys S3 objects and deletes DB rows.
-* **Logic Explanation**:
-  - **POST**:
-    - Extracts `file`, `user_id`, and `file_name` from request.
-    - Generates randomized key name with `uuidv4()`.
-    - Converts file to buffer (`ArrayBuffer` -> `Buffer`).
-    - Puts the object into the S3 bucket.
-    - Inserts a file record into Supabase.
-  - **DELETE**:
-    - Extracts `file_id` and `file_key`.
-    - Fires `DeleteObjectCommand` to S3 bucket.
-    - Performs `.delete().eq("id", file_id)` on Supabase files table.
-* **Dependencies**: `@aws-sdk/client-s3`, `@supabase/supabase-js`, `uuid`.
-* **Edge Cases Handled**: Missing params (returns status 400), database write failures, S3 upload exceptions (returns status 500).
-* **Critiques**:
-  - **Memory Blowup**: Reading files into buffers with `await file.arrayBuffer()` is highly dangerous in serverless environments. If a user uploads a 500MB file, the serverless instance will attempt to store 500MB in memory, hitting execution memory caps and crashing the container.
-  - **No Authorization**: The `DELETE` endpoint does not verify if the requesting user owns the file! A hacker could send a DELETE request targeting `/api/file` with arbitrary `file_id` and `file_key` and wipe out someone else's files.
-
-### 📂 `src/app/api/deletepipeline/route.js` (Self-Destruct Router)
-* **Purpose**: Performs a physical delete of the S3 file and toggles the database record to `is_active: false` (marking it inactive instead of completely removing the row, preserving analytics).
-* **Logic Explanation**:
-  - Fetches target file metadata.
-  - Commands S3 to delete the file object.
-  - Updates the file record in Supabase to set `is_active: false` and `expires_at` to the current timestamp.
-* **Critiques**:
-  - **Total Lack of Security**: Completely open route! Zero authorization. An attacker can delete any file by passing a POST/DELETE payload containing a target ID.
-
-### 📂 `src/app/api/analytics/track/route.js` (Stat Tracker Endpoint)
-* **Purpose**: Atomically increments counters in Redis when events (views, downloads) take place.
-* **Logic**:
-  - Validates `id` and `type` ("view" or "download").
-  - Invokes `redis.incr(file:id:views)` or `redis.incr(file:id:downloads)`.
-  - Sets `file:id:lastAccess` to current timestamp (`Date.now()`).
-
----
-
-## 5. Important Concepts Used
-
-### 1. Hybrid Routing (App Router & Pages Router)
-* **What is it**: This project is built on Next.js 15. The core application pages (`/dashboard`, `/uploadedfiles`) are structured using **App Router** (`/src/app`). However, the public share links are served via **Pages Router** (`/src/pages/public/[id].jsx`).
-* **Why it was used**: Pages Router supports `getServerSideProps` natively, allowing page-level Server Side Rendering. The developer likely wanted a simple server-side lifecycle hook that handles redirects, validations, and Redis writes before rendering the HTML.
-* **Trade-offs**: Mixing routing styles is generally a bad practice. It leads to fragmented folder layouts, double bundle-size weights, and inconsistent architectures. The public page could easily have been built as a dynamic App Router Page (`src/app/public/[id]/page.jsx`) using Standard Page Params and React Server Components.
-
-### 2. Authentication & Authorization (OAuth2 & OIDC via Kinde)
-* **Authentication**: Verifies *who* a user is. Managed externally by Kinde Auth. Users are redirected to Kinde's secure identity page, authenticate, and redirect back. Kinde drops secure, encrypted JWT cookies.
-* **Authorization**: Verifies *what* a user is allowed to do. In `src/app/uploadedfiles/[id]/page.jsx` or `src/app/uploadedfiles/page.jsx`, the server verifies the user session. If a user attempts to access file analytics for a file whose `user_id` doesn't match their own Kinde ID, they are redirected away.
-
-### 3. Storage Tiering & State Management (Blob vs. Cache)
-* **Blob Storage (AWS S3)**: Used for high-durability storage of heavy, unstructured binary files. It has 99.999999999% durability and offloads the bandwidth of serving files from the application servers.
-* **In-Memory Caching (Upstash Redis)**: Used for extremely fast, transient, high-write data (real-time analytics, view/download counters).
-* **Supabase (Postgres)**: Acts as the transactional system of record for structured relational metadata (access limits, file keys, user profiles).
-* **Architectural Rationale**: By offloading atomic logs (e.g. view increments) to Redis, we protect the primary SQL database from write-amplification and table locking under concurrent accesses.
-
-### 4. Client-Side Polling Strategies (Short Polling)
-* **What is used**: In `Analytics.jsx`, the app implements **Short Polling** using `setInterval` to request file statistics from `/api/analytics/get?id=fileId` every 5 seconds.
-* **Short Polling vs. Long Polling**:
-  - **Short Polling**: The client periodically requests the server for updates. The server responds immediately (with data or an empty payload) and closes the connection. It is simple to implement but incurs high HTTP header overhead and redundant connections.
-  - **Long Polling**: The client opens a request, and the server **holds the connection open** until new data is available or a timeout is reached. Once data updates, the server responds, and the client opens a new long-poll request. This reduces latency but consumes server connection sockets.
-  - **WebSockets / Server-Sent Events (SSE)**: Keep a persistent TCP connection alive. For a production real-time analytics system, WebSockets or SSE is superior to short polling as it cuts down connection overhead entirely.
-
-### 5. Next.js Page Generation & Rendering Strategies
-Next.js supports multiple page compilation strategies. This project utilizes three different models across its routes:
-* **Server-Side Rendering (SSR)**: Used on the public download page `/public/[id].jsx` (`getServerSideProps`). Every single page request triggers server execution to check database limits and passwords before generating the HTML. This is mandatory for real-time security gates.
-* **Incremental Static Regeneration (ISR)**: Used on the dashboard analytics page `/uploadedfiles/[id]/page.jsx` (`export const revalidate = 10`). Next.js caches the page statically and serves it instantly. If a request arrives after 10 seconds, Next.js rebuilds the page in the background. This optimizes load speed and protects the database from heavy query loads when checking historic logs.
-* **Dynamic Rendering**: Used on `/uploadedfiles/page.jsx` (`export const dynamic = "force-dynamic"`). Tells the compiler that the page must be rendered on the fly for each request because it loads unique data depending on the logged-in Kinde session.
-* **Static Site Generation (SSG)**: Used on `/about/page.jsx`. The page contains static markup and is generated once during build time, loading instantly from the server without hitting the DB.
-
----
-
-## 6. High-Level System Design (HLD) & Deployment
-
-The HLD of Track Vault focuses on high availability, stateless compute tiers, and separation of storage concerns.
-
-### HLD Architecture Diagram
+#### 2. Secure File Upload Pipeline Flow
 ```
-                     [ DuckDNS Domain: trackvault.duckdns.org ]
-                                        │
-                                        ▼
-                         [ Caddy Reverse Proxy & SSL ]
-                                  (Port 80/443)
-                                        │
-                    ┌───────────────────┴───────────────────┐
-                    ▼ (Load Balanced / Round Robin)         ▼
-             [ EC2 Instance 1 ]                      [ EC2 Instance 2 ]
-             (Next.js Server - PM2)                  (Next.js Server - PM2)
-                    │                                       │
-                    ├───────────────────┬───────────────────┤
-                    ▼                   ▼                   ▼
-           [ Upstash Redis ]    [ Supabase Postgres ]  [ AWS S3 Bucket ]
-           (Transient Cache)    (Relational metadata)  (File Object Store)
+[dashboard/page.jsx] ──> User drops file ──> handleFileSubmit() triggers
+                                                    │
+                                                    ▼
+Client creates FormData object ──> Appends file binary, user.id, and file.name
+                                                    │
+                                                    ▼
+Sends POST request to /api/file ──> Parsed by Next.js via req.formData()
+                                                    │
+                                                    ▼
+Generates random S3 Key: `${uuidv4()}.${extension}` ──> arrayBuffer() reads file binary
+                                                    │
+                                                    ▼
+Converts ArrayBuffer to Node.js Buffer ──> Invokes s3.send(new PutObjectCommand(...))
+                                                    │
+                                                    ▼
+Upload completes ──> Inserts file metadata row into Supabase Postgres 'files' table
+                                                    │
+                                                    ▼
+Supabase returns record ──> Route handler responds with status 200 and file metadata
 ```
 
-### Deployment Details
-1. **DNS Resolution (DuckDNS)**:
-   - DuckDNS acts as the dynamic DNS mapping provider, pointing `trackvault.duckdns.org` to the external IP.
-2. **Reverse Proxy & TLS (Caddy)**:
-   - Caddy runs at the entry point of the network. It reverse proxies requests to the active Next.js backend servers.
-   - Caddy automatically provisions and renews SSL/TLS certificates via Let's Encrypt, securing the public pages.
-3. **Stateless Scale-Out Tier (2x AWS EC2 Instances)**:
-   - The Next.js application is deployed across **2 EC2 Instances** in an Active-Active setup.
-   - **PM2** runs on each EC2 instance as a process manager to keep the Node.js threads alive, auto-restart on crashes, and manage logs.
-   - **The Stateless Rationale**: Because the Next.js servers are stateless, the architecture scales horizontally. User sessions are verified via Kinde Auth cookie tokens, and analytics are synced externally to Upstash Redis. If Instance 1 fails, Caddy routes all traffic to Instance 2 without session loss or data corruption.
+#### 3. Shared Access Verification and Download Tracking Flow
+```
+[User visits /public/[id]] ──> Server executes getServerSideProps(params.id)
+                                                    │
+                                                    ▼
+Queries Supabase 'files' table for record matching ID ──> If null, return 404
+                                                    │
+                                                    ▼
+Validates Expiry: Is current time > expires_at? 
+      ├──> Yes: If delete_on_expire is active, calls deletepipeline (DELETE S3 + mark inactive in DB) -> return expired: true
+      └──> No: Proceed to Redis updates
+                                                    │
+                                                    ▼
+Atomically increments view counter: redis.incr(file:id:views)
+Updates last access timestamp: redis.set(file:id:lastAccess, Date.now())
+                                                    │
+                                                    ▼
+Validates Limit: Is current views > max_views?
+      ├──> Yes: If delete_on_limit is active, calls deletepipeline -> return expired: true
+      └──> No: Returns props: { fileMeta } to page component
+                                                    │
+                                                    ▼
+[Client Page Renders]
+      ├──> If file.file_password exists, prompts for password input
+      │     └──> Client compares password against file.file_password ( Plaintext security flaw! )
+      └──> If unlocked, renders file preview (image / iframe PDF) and "Download File" button
+                                                    │
+                                                    ▼
+[User Clicks "Download"] ──> handleDownload() triggers
+                                                    │
+                                                    ▼
+POSTs to /api/analytics/track ──> Increments redis.incr(file:id:downloads) and updates lastAccess
+                                                    │
+                                                    ▼
+Client fetches file from S3 URL ──> Converts response to Blob ──> Triggers programatic browser download
+```
 
 ---
 
-## 7. Database Design
+## 4. Concept-by-Concept Deep Dive
 
-Track Vault uses a relational PostgreSQL database (hosted on Supabase) with two core tables.
-
-### 1. `users` Table
-Stores registered platform members.
-- `id` (UUID / Serial, Primary Key): Unique row identifier.
-- `email` (Text, Unique): User's registration email (conflict constraint).
-- `name` (Text): Combined given name and family name from OAuth.
-- `auth_user_id` (Text, Unique): Kinde user identifier (cross-referenced by files).
-
-### 2. `files` Table
-Stores metadata for uploaded S3 resources and access guidelines.
-- `id` (UUID, Primary Key): Randomized file ID (used in public share links).
-- `user_id` (Text, Foreign Key -> `users.auth_user_id`): Reference to the file owner.
-- `file_name` (Text): The original filename.
-- `file_key` (Text): The UUID filename representing the object inside AWS S3.
-- `file_url` (Text): The HTTP access path to AWS S3.
-- `file_type` (Text): MIME type.
-- `file_size` (BigInt): Bytes count.
-- `is_active` (Boolean, Default: true): Toggles whether the link is alive.
-- `expires_at` (Timestamp, Nullable): Custom expiration time.
-- `max_views` (Integer, Nullable): Custom access view ceiling.
-- `max_downloads` (Integer, Nullable): Custom download ceiling.
-- `file_password` (Text, Nullable): Plaintext password requirement.
-- `delete_on_expire` (Boolean): Physical S3 removal toggle.
-- `delete_on_limit` (Boolean): Limit-based self-destruction toggle.
-- `created_at` (Timestamp): Auto-generated timestamp.
-
-### Normalization Logic
-The database is in **Third Normal Form (3NF)**.
-- Each table represents a single entity (`users`, `files`).
-- Primary keys uniquely identify rows.
-- No transitive dependencies exist.
-- Transient metrics (views, downloads) are omitted from the database to avoid **Write Amplification** and frequent transactional lock contention.
+### 1. OAuth 2.0 & OpenID Connect (OIDC) via Kinde Auth
+* **What it is**: OAuth 2.0 is an authorization framework that enables third-party applications to obtain limited access to user accounts on an HTTP service. OpenID Connect (OIDC) is an identity layer built on top of OAuth 2.0, adding user profile info (name, email, profile picture) using JSON Web Tokens (JWTs).
+* **How it's implemented here**:
+  - Auth setup resides in [src/components/Provider.jsx](file:///c:/Users/sumed/code/web%20dev/projects/track-vault/src/components/Provider.jsx#L5-L15) where `KindeProvider` configures client details.
+  - Wildcard route [src/app/api/auth/[kindeAuth]/route.js](file:///c:/Users/sumed/code/web%20dev/projects/track-vault/src/app/api/auth/%5BkindeAuth%5D/route.js#L1-L3) acts as the redirect URI endpoint, handling authentication callbacks automatically.
+  - Server validation uses `getKindeServerSession()` in [src/app/api/register/route.js](file:///c:/Users/sumed/code/web%20dev/projects/track-vault/src/app/api/register/route.js#L6) and client hooks use `useKindeAuth()` in [src/app/dashboard/page.jsx](file:///c:/Users/sumed/code/web%20dev/projects/track-vault/src/app/dashboard/page.jsx#L20).
+* **Why it was needed**: Without an identity provider, Track Vault would have to store passwords, hash them, handle password resets, manage sessions, and handle cookie expiration. Utilizing Kinde delegates security compliance (e.g. MFA, session theft prevention) to an external service.
+* **Common Interview Questions**:
+  1. *Q: What is the difference between OAuth 2.0 and OIDC?*  
+     *A*: OAuth 2.0 handles authorization (obtaining access tokens). OIDC is built on top of OAuth 2.0 to handle authentication (providing an identity token like a JWT to verify who the user is).
+  2. *Q: How does the application verify that a user is authenticated in a Next.js Server Component?*  
+     *A*: By invoking `getKindeServerSession()` from `@kinde-oss/kinde-auth-nextjs/server`. This method reads and verifies the encrypted session cookies containing JWTs sent by the browser.
+  3. *Q: How do we sync user identities from Kinde Auth to our own database?*  
+     *A*: In `dashboard/page.jsx`, a `useEffect` triggers a POST request to `/api/register` when the `user` object is populated. The route handler extracts the server-side session and performs an `upsert` on conflict with the user's email inside the Supabase `users` table.
+* **Trade-offs / Alternatives**:
+  - *Alternative*: Clerk, Supabase Auth, or next-auth (Auth.js).
+  - *Comparison*: Next-auth is self-hosted and gives full database control, but requires complex database adapter configurations. Clerk and Kinde are hosted SAAS providers with low setup friction but introduce a dependency on external APIs. Kinde was chosen for its clean, seamless Next.js SDK.
 
 ---
 
-## 8. Interview Questions Section
-
-### Q1: Why did you use Upstash Redis for analytics? Why not just use your main Supabase PostgreSQL database?
-* **Answer**: Storing real-time counters (like views and downloads) in a relational database like PostgreSQL leads to **high write load**. Every single view requires an disk update transaction (`UPDATE files SET views = views + 1`), which blocks the row, causes lock contention under high traffic, and degrades performance. Redis is an **in-memory** data store. It processes writes in RAM, leading to sub-millisecond latencies. Also, operations like `INCR` are atomic, avoiding race conditions where two simultaneous views only increment the counter by one.
-
-### Q2: What are the limitations of uploading files by converting them to array buffers in a Next.js Serverless Route?
-* **Answer**: Inside `src/app/api/file/route.js`, the code converts files using `await file.arrayBuffer()`. This reads the **entire file into the serverless function's memory** before sending it to S3.
-  - **Memory Constraints**: Serverless functions (like Vercel or AWS Lambda) have memory limits (often 128MB to 1024MB). Uploading a large file (e.g. 500MB video) will exceed these limits, causing Out of Memory (OOM) crashes.
-  - **Execution Timeouts**: Uploading large files through a serverless middleman takes time, potentially exceeding the gateway timeout (typically 10-30 seconds).
-
-### Q3: How would you solve the large file upload limitations of your current approach?
-* **Answer**: I would implement **S3 Presigned Post/PUT URLs**.
-  1. Instead of the client sending the file binary to my Next.js server, the client calls an endpoint (e.g. `/api/file/presign`) passing the file name and size.
-  2. The server authenticates the user, generates a temporary secure upload URL from S3 via the SDK, and returns it to the client.
-  3. The client uploads the file **directly from the browser to AWS S3** via a `PUT` request to that presigned URL.
-  4. Once uploaded, the client calls a quick callback endpoint on the server to log the database entry. This bypasses the Next.js server completely, saving server memory, bandwidth, and execution time.
-
-### Q4: Why did you deploy the application using two EC2 instances with Caddy instead of a single server?
-* **Answer**: Deploying on two EC2 instances provides **high availability (HA)** and **horizontal scaling**. If a single EC2 server crashes, is overloaded, or undergoes maintenance, the system experiences downtime. By placing a **Caddy reverse proxy** in front of two EC2 instances, Caddy acts as a load balancer (using round-robin or least-connections), distributing user traffic across both backends. The application is completely stateless (session cookies, Redis cache, S3 file storage), allowing both servers to handle any request interchangeably. Caddy also handles automated SSL/TLS certificates with Let's Encrypt.
+### 2. Next.js Routing Architecture (App Router vs Pages Router)
+* **What it is**: Next.js 15 supports two routing systems. The **App Router** (`/src/app`) uses React Server Components (RSC) by default, facilitating layouts, loading boundaries, and server-first components. The **Pages Router** (`/src/pages`) is the older, page-centric system that relies on page-level data-fetching functions like `getServerSideProps` for SSR.
+* **How it's implemented here**:
+  - The authenticated dashboard, layout, and API routes reside in the App Router: `/src/app/dashboard/page.jsx`, `/src/app/uploadedfiles/page.jsx`, and `/src/app/api/file/route.js`.
+  - The public file access portal is implemented using the Pages Router in [src/pages/public/[id].jsx](file:///c:/Users/sumed/code/web%20dev/projects/track-vault/src/pages/public/%5Bid%5D.jsx#L197).
+* **Why it was needed**: The developer needed page-level SSR with `getServerSideProps` to validate passwords and check download ceilings on *every* request. In the App Router, this requires custom middleware or server actions, whereas the Pages Router handles this page-level interception cleanly.
+* **Common Interview Questions**:
+  1. *Q: Why did you mix both the App Router and Pages Router in this project?*  
+     *A*: The App Router was selected to leverage React Server Components and nested layouts for the uploader's dashboard. The Pages Router was selected specifically for the public file-sharing route because `getServerSideProps` provides a simple, well-defined Server-Side Rendering lifecycle to intercept requests, check limits, write to Redis, and handle redirects.
+  2. *Q: Can a single Next.js project run both routers concurrently?*  
+     *A*: Yes. Next.js natively supports co-existence. App Router paths take precedence over Pages Router paths if there is a naming collision.
+  3. *Q: How would you migrate the Pages Router route (`/public/[id].jsx`) to the App Router?*  
+     *A*: I would create `src/app/public/[id]/page.jsx`. I would make it a dynamic Server Component, read the route parameters directly from the component props (`async ({ params })`), perform the Supabase and Redis checks inside the component body, and use `redirect()` or `notFound()` from `next/navigation` to handle expired states.
+* **Trade-offs / Alternatives**:
+  - *Trade-offs*: Mixing routers is generally considered an architectural anti-pattern. It duplicates bundle sizes (loading both router runtimes), fragments folder structures, and complicates global layouts, as styles from `src/styles/globals.css` must be manually imported in Pages Router files (`import "@/styles/globals.css"`).
 
 ---
 
-## 9. Cross Questions (Deep Interview Drill)
-
-### Concept: Next.js Rendering & ISR
-* **Q**: "Why did you use ISR (Incremental Static Regeneration) with revalidate = 10 for the analytics page?"
-* **A**: ISR allows us to serve the analytics dashboard statically from the server cache, keeping the initial load time at 0ms. It regenerates the page in the background at most once every 10 seconds, updating the historical charts without hitting Supabase on every page load.
-* **Cross-Q**: *If a user updates access rules (e.g. changes password or expiry), does ISR cause a 10-second delay before the changes are live on the public page?*
-* **Cross-A**: No, because the public download page `/public/[id].jsx` is rendered using **SSR (Server-Side Rendering)** with `getServerSideProps`. While the owner's analytics page is cached for 10 seconds via ISR, the recipient's file-access gateway runs on SSR, checking the live Supabase database on every request. Therefore, security rule updates are instantly active for the recipient.
-
-### Concept: Redis Data Consistency & Stateless Compute
-* **Q**: "Since you have 2 EC2 instances, how do they sync the view counts?"
-* **A**: Because the Next.js app on both servers connects to a single external centralized cache (Upstash Redis), both instances read and write from the exact same counter keys.
-* **Cross-Q**: *What if two users view the file at the exact same time through Server 1 and Server 2? How does Redis guarantee correct counts?*
-* **Cross-A**: Redis is single-threaded and executes commands sequentially. When Server 1 issues `INCR` and Server 2 issues `INCR` concurrently, Redis serializes these calls, performing two distinct atomic updates. This guarantees the count increases by exactly two, avoiding write race conditions.
-
-### Concept: Caddy vs Nginx
-* **Q**: "Why did you choose Caddy as a reverse proxy instead of Nginx?"
-* **A**: Caddy was chosen for its developer experience, especially its **automatic SSL provisioning and renewal** from Let's Encrypt out-of-the-box. Nginx requires manual setup of Certbot, Cron jobs for renewals, and complex config files. Caddy's configuration file (Caddyfile) is clean and consists of just a few lines.
-* **Cross-Q**: *What are the performance limitations of Caddy compared to Nginx in production?*
-* **Cross-A**: Nginx is written in C and is highly optimized for raw static file throughput and high concurrency, consuming very little memory. Caddy is written in Go; while highly performant and concurrent, it consumes slightly more memory under load. For a dynamic application like Next.js where Node.js does the rendering, the difference in reverse proxy performance is negligible.
+### 3. Ephemeral Cache & Counter Management via Upstash Redis
+* **What it is**: Redis (Remote Dictionary Server) is an in-memory key-value data store. Upstash Redis provides a serverless Redis database accessible over a REST API (using HTTP instead of persistent TCP sockets).
+* **How it's implemented here**:
+  - Initialized in [src/lib/redis.js](file:///c:/Users/sumed/code/web%20dev/projects/track-vault/src/lib/redis.js#L3).
+  - Used in `/api/analytics/track/route.js` (lines 10, 13) and `/pages/public/[id].jsx` (lines 219, 220) to track views and downloads:
+    ```javascript
+    const views = await redis.incr(`file:${id}:views`);
+    await redis.set(`file:${id}:lastAccess`, Date.now());
+    ```
+* **Why it was needed**: Storing analytical counters in PostgreSQL would require updating a database row (`UPDATE files SET views = views + 1`) on every page load. This causes **write amplification** and transaction locks on the `files` table under high traffic. Offloading counters to an in-memory Redis instance with O(1) atomic increments ensures fast tracking and protects the primary DB.
+* **Common Interview Questions**:
+  1. *Q: Why choose Upstash Redis over a local Dockerized Redis instance?*  
+     *A*: Upstash Redis exposes a REST API over HTTP. Traditional Redis clients keep persistent TCP connections open, which can exhaust connection pools in stateless serverless environments. Upstash handles connection pooling internally, making it ideal for Serverless Route Handlers.
+  2. *Q: What is an atomic operation, and how does `redis.incr` prevent race conditions?*  
+     *A*: An atomic operation is one that runs completely or not at all. Because Redis is single-threaded, it processes incoming commands sequentially. If two requests increment a counter concurrently, Redis serializes them, ensuring the counter is incremented by exactly 2. In a relational database, concurrent reads/writes can overwrite each other, causing a race condition.
+  3. *Q: How do we synchronize Redis data back to Supabase?*  
+     *A*: Currently, we do not sync it back. Supabase stores the configuration rules, and Redis acts as the source of truth for the transient analytics. To sync them, we could run a cron job to batch-write counts to PostgreSQL, or write to PostgreSQL during the self-destruct delete pipeline.
+* **Trade-offs / Alternatives**:
+  - *Alternative*: Node-cache (in-memory variable), or directly updating PostgreSQL.
+  - *Comparison*: Node-cache is local to the server process, so it cannot sync counts across multiple EC2 instances. PostgreSQL updates are persistent but slow and prone to lock contention. Redis is the industry standard for shared, high-throughput counters.
 
 ---
 
-## 10. Optimization & Improvements (Senior Critique)
+### 4. Relational Database Design (Supabase Postgres)
+* **What it is**: PostgreSQL is an open-source object-relational database. Supabase hosts PostgreSQL and provides a RESTful client SDK that maps database operations directly to JavaScript methods.
+* **How it's implemented here**:
+  - Configured in [src/lib/supabase.js](file:///c:/Users/sumed/code/web%20dev/projects/track-vault/src/lib/supabase.js#L3).
+  - Queries are written using the Supabase client wrapper, such as retrieving a file metadata row in [src/pages/public/[id].jsx](file:///c:/Users/sumed/code/web%20dev/projects/track-vault/src/pages/public/%5Bid%5D.jsx#L200-L204):
+    ```javascript
+    const { data: file, error } = await supabase
+      .from("files")
+      .select("*")
+      .eq("id", id)
+      .single();
+    ```
+* **Why it was needed**: Next.js requires a persistent, relational database to store file ownerships, passwords, and file access settings. Supabase provides PostgreSQL tables with foreign key constraints, guaranteeing data integrity between `users` and `files`.
+* **Common Interview Questions**:
+  1. *Q: Why use UUIDs for file IDs instead of auto-incrementing integers?*  
+     *A*: Auto-incrementing IDs (e.g. `/public/1`, `/public/2`) are guessable. Attackers could scan public URLs sequentially to scrape files. UUIDs are globally unique and practically unguessable, securing public sharing links.
+  2. *Q: How is the relation between the `users` and `files` tables defined in this project?*  
+     *A*: The `files` table contains a foreign key `user_id` which references the `auth_user_id` (Kinde ID) in the `users` table. This establishes a **one-to-many relationship**, where one user can own many files.
+  3. *Q: What SQL normalization rules does this database layout satisfy?*  
+     *A*: It satisfies the Third Normal Form (3NF). Entities (`users` and `files`) are split into separate tables, primary keys uniquely identify each row, and there are no transitive dependencies.
+* **Trade-offs / Alternatives**:
+  - *Alternative*: MongoDB (NoSQL) or Prisma ORM.
+  - *Comparison*: MongoDB lacks strict relational foreign key constraints out-of-the-box. Prisma is an ORM wrapper that requires an extra compilation step. Using the direct Supabase SDK avoids extra dependencies and provides real-time subscription capabilities if needed.
 
-During review, several critical security flaws, design errors, and bad practices were discovered in the codebase:
+---
 
-### 🚨 1. Critical Security Vulnerability: Plaintext Password Exposure
-* **The Flaw**: When a user locks a file with a password, the password is saved in plaintext in the database column `file_password`. Even worse, inside `src/pages/public/[id].jsx`, `getServerSideProps` retrieves the file metadata (including `file_password`) and returns it to the React client *before* the password check occurs!
-* **The Exploit**: A recipient can simply inspect the webpage source, inspect the global JSON object `__NEXT_DATA__` (located in a script tag in Next.js SSR pages), or use React Developer Tools to find the plaintext password, bypassing the unlock form instantly.
+### 5. Object Storage (AWS S3) & Buffer-Based Uploads
+* **What it is**: Amazon Simple Storage Service (S3) is an object storage service designed for storing and retrieving flat files. Rather than keeping files in a local file system, S3 stores them as objects in virtual buckets, accessible over HTTP.
+* **How it's implemented here**:
+  - Configured in [src/lib/s3.js](file:///c:/Users/sumed/code/web%20dev/projects/track-vault/src/lib/s3.js#L4) using `@aws-sdk/client-s3`.
+  - In [src/app/api/file/route.js](file:///c:/Users/sumed/code/web%20dev/projects/track-vault/src/app/api/file/route.js#L24-L34), uploads are processed by reading the request stream into an ArrayBuffer, converting it to a Node.js Buffer, and sending it to S3:
+    ```javascript
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: process.env.AWS_S3_BUCKET,
+        Key: fileName,
+        Body: buffer,
+        ContentType: file.type,
+      })
+    );
+    ```
+* **Why it was needed**: Web servers are stateless and have limited disk space. Files uploaded to a server's local storage would disappear when the server restarts or scales. AWS S3 provides highly durable, permanent object storage that offloads file serving bandwidth from the application servers.
+* **Common Interview Questions**:
+  1. *Q: What is a major performance bottleneck of the current file upload implementation?*  
+     *A*: Inside `api/file/route.js`, the code uses `await file.arrayBuffer()` to read the entire file into server memory as a buffer. If a user uploads a large file (e.g. 500MB), the serverless function will run out of memory (OOM) and crash the execution container.
+  2. *Q: How would you optimize the upload process to handle large files (e.g., >1GB)?*  
+     *A*: By generating **S3 Presigned Post/PUT URLs**. Instead of uploading the file to the Next.js server, the client requests a temporary upload URL from S3 via an API endpoint. The client then uploads the file binary directly from the browser to AWS S3, bypassing the Next.js server entirely.
+  3. *Q: How do we delete an object from S3 when a file is deleted?*  
+     *A*: We call `s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: fileMeta.file_key }))` using the unique file key stored in our database.
+* **Trade-offs / Alternatives**:
+  - *Alternative*: Supabase Storage.
+  - *Comparison*: Supabase Storage is a wrapper around S3. Using AWS S3 directly is cloud-native, cheaper at scale, and provides fine-grained IAM configuration for bucket security.
+
+---
+
+### 6. Client-Side Short Polling vs. Real-Time Alternatives
+* **What it is**: Short polling is a client-side strategy where the browser repeatedly sends HTTP requests to the server at fixed intervals to fetch updated data.
+* **How it's implemented here**:
+  - Implemented in [src/components/analyticsContol/Analytics.jsx](file:///c:/Users/sumed/code/web%20dev/projects/track-vault/src/components/analyticsContol/Analytics.jsx#L20-L27) using `setInterval`:
+    ```javascript
+    const interval = setInterval(async () => {
+      try {
+        const res = await axios.get(`/api/analytics/get?id=${file.id}`);
+        setData(res.data);
+      } catch (err) {
+        console.error("Polling error:", err);
+      }
+    }, 5000);
+    ```
+* **Why it was needed**: The dashboard needs to show real-time views and downloads as they occur. Short polling is a simple way to fetch these updates without keeping persistent connections open.
+* **Common Interview Questions**:
+  1. *Q: What are the drawbacks of short polling every 5 seconds?*  
+     *A*: It generates significant HTTP header overhead, consumes client bandwidth, and creates redundant load on the server (even when the data has not changed). It also introduces up to a 5-second delay before analytics updates are visible on the dashboard.
+  2. *Q: How does Long Polling differ from Short Polling?*  
+     *A*: In short polling, the server responds immediately (even if there is no new data). In long polling, the server holds the request open until a data update occurs or a timeout is reached, which reduces redundant network requests.
+  3. *Q: What is a more scalable real-time alternative to polling?*  
+     *A*: **Server-Sent Events (SSE)** or **WebSockets**. SSE establishes a persistent, unidirectional HTTP connection where the server pushes updates to the client as they happen. WebSockets provide a bidirectional TCP connection, which is ideal for real-time applications but requires managing socket connections.
+* **Trade-offs / Alternatives**:
+  - *Comparison*: Short polling is easy to implement and fits stateless serverless architectures because it uses standard HTTP requests. WebSockets require dedicated server resources to maintain persistent connections, which is difficult to manage on serverless platforms like Vercel without a third-party gateway (e.g., Socket.io server).
+
+---
+
+### 7. Next.js Page Generation & Rendering Strategies
+* **What it is**: Next.js supports four rendering strategies:
+  - **Server-Side Rendering (SSR)**: The HTML is generated on the server for *every* request.
+  - **Incremental Static Regeneration (ISR)**: The page is built statically once but regenerated in the background after a set revalidation interval.
+  - **Dynamic Rendering**: Pages are rendered on the server at request time if they use dynamic methods (e.g., cookies or headers).
+  - **Static Site Generation (SSG)**: The HTML is built once at build time and cached.
+* **How it's implemented here**:
+  - **SSR**: Used on the public sharing page `/pages/public/[id].jsx` via `getServerSideProps` to run access checks on every request.
+  - **ISR**: Used on the analytics page `/src/app/uploadedfiles/[id]/page.jsx` using `export const revalidate = 10` (line 13) to cache the owner's analytics dashboard for 10 seconds.
+  - **Dynamic Rendering**: Enforced on `/src/app/uploadedfiles/page.jsx` using `export const dynamic = "force-dynamic"` (line 10) to render the list of uploaded files dynamically for each logged-in user.
+  - **SSG**: Used on `/about/page.jsx`, which compiles to static HTML at build time.
+* **Why it was needed**: Public access control requires immediate, request-time evaluation to block unauthorized users or expired links. Dashboard analytics are less critical and can be cached for 10 seconds using ISR to reduce database load.
+* **Common Interview Questions**:
+  1. *Q: Why use SSR for the public sharing page instead of ISR?*  
+     *A*: ISR caches pages on the CDN. If we used ISR for `/public/[id]`, an expired or password-locked file page might still be served from the cache to public users. SSR ensures that every page load executes our validation rules against the database and Redis in real-time.
+  2. *Q: What happens during the 10-second revalidation period of an ISR page?*  
+     *A*: Users are served the cached static page instantly. When a request comes in after the 10-second window, Next.js serves the cached page but triggers a background regeneration. Once the new page is built, the CDN cache is updated.
+  3. *Q: How does `force-dynamic` work in Next.js?*  
+     *A*: It bypasses static export optimization during build time, forcing Next.js to render the page on the server at request time. This is necessary when reading dynamic user sessions from cookies or headers.
+* **Trade-offs / Alternatives**:
+  - SSR has higher initial page load latency (TTFB) compared to ISR/SSG, but it guarantees up-to-date, secure content delivery.
+
+---
+
+### 8. API Design, CORS, and HTTP Lifecycle
+* **What it is**: Cross-Origin Resource Sharing (CORS) is a browser security mechanism that restricts web pages from making requests to a different domain than the one that served the web page.
+* **How it's implemented here**:
+  - The custom Axios instance in [src/lib/axios.js](file:///c:/Users/sumed/code/web%20dev/projects/track-vault/src/lib/axios.js#L3-L6) is configured with a base URL and credentials:
+    ```javascript
+    const api = axios.create({
+      baseURL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000/api",
+      withCredentials: true,
+    });
+    ```
+* **Why it was needed**: Setting `withCredentials: true` is necessary to ensure the browser forwards authentication cookies (such as Kinde session tokens) along with API requests.
+* **Common Interview Questions**:
+  1. *Q: What is CORS, and why does the browser enforce it?*  
+     *A*: CORS is a browser security mechanism that prevents malicious scripts on one website from making unauthorized API requests to another domain. Browsers enforce it by sending an HTTP preflight request (`OPTIONS`) to verify that the target domain permits cross-origin requests.
+  2. *Q: Why is `withCredentials: true` required in our Axios configuration?*  
+     *A*: By default, browsers do not send credentials (like cookies or authorization headers) with cross-origin requests. Setting `withCredentials: true` forces Axios to include these cookies, allowing our API endpoints to authenticate requests.
+  3. *Q: How does the HTTP Preflight request work?*  
+     *A*: The browser sends an `OPTIONS` request to the API endpoint with headers like `Access-Control-Request-Method`. The server responds with `Access-Control-Allow-Origin` and `Access-Control-Allow-Credentials` to confirm the request is allowed.
+* **Trade-offs / Alternatives**:
+  - If the frontend and backend are hosted on the same domain, CORS preflight checks are bypassed, which improves API latency.
+
+---
+
+### 9. Security Vulnerabilities and Code Critiques
+
+During code review, three security vulnerabilities were identified in the codebase:
+
+#### 🚨 Vulnerability 1: Plaintext Password Exposure on the Client
+* **The Flaw**: When a user locks a file with a password, the plaintext password is stored in the `file_password` database column. In [src/pages/public/[id].jsx](file:///c:/Users/sumed/code/web%20dev/projects/track-vault/src/pages/public/%5Bid%5D.jsx#L236), `getServerSideProps` fetches the file record using `.select("*")` and returns the entire object—including the plaintext password—to the client as a page prop:
+  ```javascript
+  return { props: { fileMeta: file } };
+  ```
+  The React component then performs a client-side check to verify the password:
+  ```javascript
+  if (password === file.file_password) { ... }
+  ```
+* **The Exploit**: The plaintext password is sent to the client browser before they enter it. Anyone can open the browser devtools, view the Next.js `__NEXT_DATA__` script tag, or check the React props to find the password and unlock the file.
 * **The Fix**: 
-  1. Never send the password column to the client.
-  2. Implement server-side password validation: The page should initially return only a metadata indicator (e.g., `password_required: true`).
-  3. The recipient enters the password, which is POSTed to a server action or API route. The server hashes/compares the passwords, logs the session, and returns a temporary secure cookie or signed token that allows file download access.
+  1. **Do not send the password to the client**: In `getServerSideProps`, remove the password field from the metadata object and send a boolean indicator instead:
+     ```javascript
+     const fileMeta = { ...file, password_required: !!file.file_password };
+     delete fileMeta.file_password;
+     ```
+  2. **Server-Side Validation**: Create an API endpoint (e.g. `/api/file/unlock`) that accepts the file ID and the user's password. The server hashes and compares the password, and if correct, returns a temporary signed session cookie or token that authorizes the file download.
 
-### 🚨 2. Critical Security Vulnerability: Unauthorized Actions & IDOR
-* **The Flaw**: Both `DELETE` requests in `/api/file` and `/api/deletepipeline` are completely unauthenticated. They do not parse the Kinde Auth session to check if the caller is the owner of the target file.
-* **The Exploit**: Anyone can send an HTTP DELETE request to `http://localhost:3000/api/file` passing an arbitrary `file_id` and delete any file from S3 and Supabase.
-* **The Fix**: Authenticate the caller inside the API route using `getKindeServerSession()`. Query the files table and check if the `user_id` matches the authenticated user ID before executing deletions.
+#### 🚨 Vulnerability 2: Insecure Direct Object Reference (IDOR) on Deletion Routes
+* **The Flaw**: The delete routes in [src/app/api/file/route.js](file:///c:/Users/sumed/code/web%20dev/projects/track-vault/src/app/api/file/route.js#L66) and [src/app/api/deletepipeline/route.js](file:///c:/Users/sumed/code/web%20dev/projects/track-vault/src/app/api/deletepipeline/route.js#L10) are unauthenticated. They do not verify if the requesting user owns the file.
+* **The Exploit**: Anyone can send an HTTP DELETE request to `/api/file` or `/api/deletepipeline` containing another user's `file_id` to delete their files from S3 and Supabase.
+* **The Fix**: Retrieve the uploader's session inside the delete handlers using `getKindeServerSession()` and verify that the file's `user_id` matches the authenticated user's ID before performing the deletion:
+  ```javascript
+  const { getUser } = getKindeServerSession();
+  const user = await getUser();
+  // Query DB to verify: file.user_id === user.id
+  ```
 
-### 💡 3. Architectural Defect: Local HTTP Loopbacks
-* **The Flaw**: In `getServerSideProps`, when a file is expired, it runs a loopback Axios query to `/deletepipeline`.
-* **The Problem**: Making a network request from a server to itself is slow, wastes socket resources, and raises deployment complexity.
-* **The Fix**: Abstract the deletion code into a helper function (e.g., `deleteFileResource(fileId)`) and import it directly into `getServerSideProps`.
+#### 🚨 Vulnerability 3: Memory Exhaustion via Buffer Uploads
+* **The Flaw**: Inside `/api/file/route.js`, files are read into memory using `await file.arrayBuffer()` and converted into a Buffer.
+* **The Exploit**: Large concurrent file uploads can easily exhaust the server's memory, leading to Out of Memory (OOM) crashes and service downtime.
+* **The Fix**: Stream the upload payload directly to S3 or generate S3 Presigned URLs so the client uploads the file directly to S3 from the browser, bypassing the application server.
 
 ---
 
-## 11. Quick Revision Notes
+## 5. Key Logic: Access Check and Self-Destruct Cascade
 
-### ⚡ 30-Second Elevator Pitch
-> "**Track Vault** is a secure, self-destructing file sharing application built in Next.js. It allows users to upload files to AWS S3, set expiration rules (expiry dates, password locks, and view/download limits), and monitors usage statistics in real-time using Upstash Redis. When access criteria are breached, it auto-deletes files from cloud storage to protect privacy. The application is deployed horizontally across two EC2 instances behind a Caddy reverse proxy using DuckDNS."
+The core feature of Track Vault is the **Access Verification and Self-Destruct Deletion Pipeline**. It evaluates access criteria in real-time and triggers physical file deletion if limits are exceeded.
 
-### ⚠️ Common Interview Traps to Avoid
+### Conceptual Flowchart
+```
+                [ Public Request to /public/[id] ]
+                                │
+                                ▼
+                   [ Query Supabase for Metadata ]
+                                │
+                                ▼
+                  { Is expires_at <= Date.now()? }
+                     ├── Yes ──> [ Check delete_on_expire ]
+                     │                 ├── Yes ──> [ Trigger Delete Pipeline ] ──> [ Return Expired UI ]
+                     │                 └── No  ──> [ Return Expired UI ]
+                     └── No  ──> [ Proceed to Redis Counters ]
+                                │
+                                ▼
+            [ Atomic Increment: views = redis.incr() ]
+            [ Set timestamp: redis.set(lastAccess) ]
+                                │
+                                ▼
+                    { Is views > max_views? }
+                     ├── Yes ──> [ redis.decr() ]
+                     │           [ Check delete_on_limit ]
+                     │                 ├── Yes ──> [ Trigger Delete Pipeline ] ──> [ Return Expired UI ]
+                     │                 └── No  ──> [ Return Expired UI ]
+                     └── No  ──> [ Render unlocked page / Password gate ]
+```
+
+### Self-Destruct Delete Pipeline Logic
+The deletion logic is split across the check stage in `getServerSideProps` and the execution route handler in `/api/deletepipeline/route.js`:
+
+```javascript
+// Excerpt from src/pages/public/[id].jsx (getServerSideProps)
+if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) {
+  if (file.delete_on_expire) {
+    try {
+      await api.delete("/deletepipeline", { data: { file_id: file.id } });
+    } catch (err) {
+      console.error("Delete pipeline (expire) failed:", err.message);
+    }
+  }
+  return { props: { fileMeta: { ...file, expired: true } } };
+}
+```
+
+```javascript
+// Excerpt from src/app/api/deletepipeline/route.js (DELETE)
+export async function DELETE(req) {
+  const { file_id } = await req.json();
+  const { data: fileMeta } = await supabase.from("files").select("*").eq("id", file_id).single();
+
+  // 1. Physically delete the object from AWS S3
+  await s3.send(new DeleteObjectCommand({
+    Bucket: process.env.AWS_S3_BUCKET,
+    Key: fileMeta.file_key,
+  }));
+
+  // 2. Mark the record as inactive and update its expiration timestamp in Supabase
+  await supabase.from("files").update({
+    is_active: false,
+    expires_at: new Date().toISOString(),
+  }).eq("id", file_id);
+
+  return NextResponse.json({ success: true });
+}
+```
+
+### Complexity Analysis
+* **Time Complexity**: **O(1)**. Primary database lookups and updates in PostgreSQL use indexed primary keys. Upstash Redis increments (`INCR`) and sets (`SET`) are memory-bound and run in constant time.
+* **Space Complexity**: **O(1)**. The server does not store file binaries or growing arrays during access verification.
+* **Network Overhead Latency**: **O(N)**. Since `getServerSideProps` triggers a loopback HTTP DELETE request to `/api/deletepipeline` via Axios, the server must open an external HTTP loopback connection to itself. This increases network latency and wastes socket connections. It should be refactored to call the database/S3 deletion logic directly as an internal function.
+
+---
+
+## 6. Challenges & Design Decisions
+
+### 1. Ephemeral vs. Relational Storage Split
+* **The Decision**: Splitting file counters (views, downloads) into Redis while keeping file configuration rules in PostgreSQL.
+* **Reasoning**: Real-time counter updates generate high write loads on database tables. In PostgreSQL, this causes write amplification and row lock contention. Offloading these increments to Redis protects the primary database.
+* **Trade-off**: This split introduces eventual consistency challenges. If a file is deleted, we must also clean up the Redis keys (`file:id:views`, `file:id:downloads`) to prevent memory leaks in our Redis instance.
+
+### 2. Active vs. Inactive State Partitioning
+* **The Decision**: Retaining files in the database with `is_active: false` when they expire or hit download limits, rather than deleting the rows.
+* **Reasoning**: Uploader accounts need to see historic analytics (total views and downloads) for past files. By setting `is_active: false` and deleting only the physical binary from S3, the user can still view their historical sharing records.
+* **Trade-off**: The database size will grow over time as expired rows accumulate. This can be resolved by archiving inactive records to an analytics warehouse or enforcing a hard retention limit (e.g., 30 days) before purging the rows.
+
+### 3. Server-Side Execution Gate vs. Client-Side Middleware
+* **The Decision**: Performing access validation inside `getServerSideProps` (SSR) instead of using Next.js client-side hooks.
+* **Reasoning**: Client-side checks are insecure because the browser has already downloaded the page data. Running validation on the server ensures that if a file is expired, the file binary URL is never sent to the client browser.
+* **Trade-off**: SSR increases Page load latency (Time to First Byte) because the server must query Supabase and Redis before rendering the HTML. This latency is a necessary trade-off for security.
+
+---
+
+## 7. Quick Revision Sheet
+
+### Concept-by-Concept Interview Cheat Sheet
+- **OIDC/OAuth (Kinde)**: Delegation of authentication via secure, JWT-based cookies, checked on the server with `getKindeServerSession()`.
+- **Hybrid Routing**: Mixing App Router (dashboard layouts) and Pages Router (SSR sharing page) in Next.js to leverage both systems.
+- **Serverless Redis (Upstash)**: Ephemeral memory cache offering atomic operations (`INCR`) over HTTP to track file analytics without database write-amplification.
+- **Object Storage (AWS S3)**: Scalable, flat object store for file binaries, accessed via SDK Commands (`PutObjectCommand`, `DeleteObjectCommand`).
+- **Postgres (Supabase)**: Transactional relational database using SQL queries (`upsert`, `select`, `update`) to manage file metadata.
+- **Short Polling**: A simple real-time updates strategy where the client sends requests at set intervals (5s). It is easy to configure but generates network overhead.
+- **Next.js Rendering**: SSR (`getServerSideProps`) for real-time security checking; ISR (`revalidate = 10`) for cached dashboard rendering; Dynamic (`force-dynamic`) for request-time rendering.
+- **Preflight CORS Checks**: Browser security mechanism checking permissions via an HTTP `OPTIONS` handshake; enabled credentials sharing using `withCredentials: true`.
+- **Plaintext Password Exposure**: A security flaw where the password is sent to the client browser inside React props (`__NEXT_DATA__`) before being verified.
+- **Insecure Direct Object Reference (IDOR)**: A vulnerability where an API route (e.g. `/api/file`) performs database operations without verifying user ownership.
+- **Buffer Memory Blowup**: Uploading files by reading the entire binary into a Node.js Buffer in-memory, which crashes the serverless runtime for large files.
+
+### 30-Second Elevator Pitch
+> "**Track Vault** is a secure, self-destructing file-sharing application built on Next.js. It allows users to upload files to AWS S3, set custom access rules (expiry times, password locks, and view/download limits), and track usage statistics in real-time using Upstash Redis. When access criteria are breached, it automatically deletes files from S3 and marks them inactive in Supabase to protect privacy. The application is deployed horizontally across EC2 instances behind a Caddy reverse proxy using DuckDNS."
+
+### High-Yield Interview Warnings & Traps
 1. **"Is your password locking secure?"**
    * *Trap*: Answering "Yes, it requests a password before showing the download button."
-   * *Correct Response*: "Actually, the current prototype performs client-side validation using plaintext metadata passwords, which is a security vulnerability. For production, I would hash the passwords using bcrypt, validate them strictly on the server side, and authorize downloads via signed session tokens."
+   * *Correct Response*: "No, the current implementation has a security vulnerability where `getServerSideProps` sends the plaintext password to the client inside the Next.js page props before verification. An attacker can inspect the page source to find the password. To secure this, I would perform password checks on the server-side and authorize downloads using signed session cookies."
 2. **"Does this scale to 5GB video files?"**
    * *Trap*: "Yes, S3 is highly scalable and handles large files easily."
-   * *Correct Response*: "While AWS S3 scales, my Next.js API upload handler loads the entire file into serverless memory as a buffer. This will fail with Out of Memory errors for files over a few megabytes. To scale this, I would refactor the frontend to fetch a presigned upload URL from S3 and upload the file binaries directly from the client."
-
-### 📝 Key Vocab checklist
-* **S3 Presigned URL**: A temporary access URL generated by the bucket owner to allow reading or writing objects without public permissions.
-* **Atomic Operation (`INCR`)**: Database operations that run entirely or not at all, preventing dirty reads or count sync errors.
-* **Hydration**: The process where client-side React attaches event listeners to pre-rendered HTML sent by Next.js Server-Side Rendering.
-* **Short Polling**: A client querying the server for updates at fixed time intervals (used in our analytics dashboard).
-* **Caddy Reverse Proxy**: A modern HTTP web server written in Go that routes incoming client requests to backend Node/Next instances, handling automatic HTTPS out-of-the-box.
-* **Stateless Application**: A system design pattern where the application server doesn't retain local session state. This allows any server instance (e.g., in our 2x EC2 setup) to handle any user request seamlessly.
+   * *Correct Response*: "S3 scales, but our upload handler reads the entire file into server memory as a buffer. This will fail with Out of Memory errors for files larger than a few megabytes. To scale this, I would refactor the upload process to use S3 Presigned URLs so the browser uploads files directly to S3."
+3. **"Why use Redis instead of PostgreSQL for views?"**
+   * *Trap*: "Because Redis is faster and easier to set up."
+   * *Correct Response*: "Updating view counters in PostgreSQL generates frequent write operations (`UPDATE` transactions) that lock rows and cause write amplification under high traffic. Redis is an in-memory database that handles increments atomically in RAM, which avoids database locks."
